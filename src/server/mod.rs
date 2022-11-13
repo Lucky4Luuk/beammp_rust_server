@@ -5,9 +5,11 @@ use tokio::net::TcpListener;
 
 mod client;
 mod packet;
+mod backend;
 
 pub use client::*;
 pub use packet::*;
+pub use backend::*;
 
 pub struct Server {
     listener: Arc<TcpListener>,
@@ -69,7 +71,7 @@ impl Server {
         // Process all the clients
         for i in 0..self.clients.len() {
             self.clients[i].process().await?;
-            if self.clients[i].state == ClientState::Close {
+            if self.clients[i].state == ClientState::Disconnect {
                 let id = self.clients[i].id;
                 info!("Disconnecting client {}...", id);
                 self.clients.remove(i);
