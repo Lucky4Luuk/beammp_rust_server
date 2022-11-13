@@ -165,6 +165,7 @@ impl Client {
         Ok(())
     }
 
+    // TODO: https://github.com/BeamMP/BeamMP-Server/blob/master/src/TNetwork.cpp#L619
     pub async fn sync(&mut self) -> anyhow::Result<()> {
         'syncing: while self.state == ClientState::Syncing {
             self.socket.readable().await?;
