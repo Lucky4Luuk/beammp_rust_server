@@ -1,18 +1,22 @@
 use std::sync::{Arc, Mutex};
 
 use tokio::task::JoinHandle;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UdpSocket};
 
 mod client;
 mod packet;
 mod backend;
+mod car;
 
 pub use client::*;
 pub use packet::*;
 pub use backend::*;
+pub use car::*;
 
 pub struct Server {
-    listener: Arc<TcpListener>,
+    tcp_listener: Arc<TcpListener>,
+    udp_socket: Arc<UdpSocket>,
+
     clients_incoming: Arc<Mutex<Vec<Client>>>,
     clients: Vec<Client>,
 
@@ -21,8 +25,10 @@ pub struct Server {
 
 impl Server {
     pub async fn new() -> anyhow::Result<Self> {
-        let listener = Arc::new(TcpListener::bind("0.0.0.0:48900").await?);
-        let listener_ref = Arc::clone(&listener);
+        let tcp_listener = Arc::new(TcpListener::bind("0.0.0.0:48900").await?);
+        let tcp_listener_ref = Arc::clone(&tcp_listener);
+
+        let udp_socket = Arc::new(UdpSocket::bind("0.0.0.0:48900").await?);
 
         let clients_incoming = Arc::new(Mutex::new(Vec::new()));
         let clients_incoming_ref = Arc::clone(&clients_incoming);
@@ -30,7 +36,7 @@ impl Server {
         debug!("Client acception runtime starting...");
         let connect_runtime_handle = tokio::spawn(async move {
             loop {
-                match listener_ref.accept().await {
+                match tcp_listener_ref.accept().await {
                     Ok((socket, addr)) => {
                         info!("New client connected: {:?}", addr);
 
@@ -55,7 +61,9 @@ impl Server {
         debug!("Client acception runtime started!");
 
         Ok(Self {
-            listener: listener,
+            tcp_listener: tcp_listener,
+            udp_socket: udp_socket,
+
             clients_incoming: clients_incoming,
             clients: Vec::new(),
 
@@ -67,25 +75,153 @@ impl Server {
         // Bit weird, but this is all to avoid deadlocking the server if anything goes wrong
         // with the client acception runtime. If that one locks, the server won't accept
         // more clients, but it will at least still process all other clients
+        let mut joined_names = Vec::new();
         if let Ok(mut clients_incoming_lock) = self.clients_incoming.try_lock() {
             if clients_incoming_lock.len() > 0 {
                 trace!("Accepting {} incoming clients...", clients_incoming_lock.len());
                 for i in 0..clients_incoming_lock.len() {
+                    joined_names.push(clients_incoming_lock[i].info.as_ref().unwrap().username.clone());
                     self.clients.push(clients_incoming_lock.swap_remove(i));
                 }
                 trace!("Accepted incoming clients!");
             }
         }
 
-        // Process all the clients
+        // Process UDP packets
+        for packet in self.read_udp_packets().await {
+            todo!("packet: {:?}", packet);
+        }
+
+        // Process all the clients (TCP)
+        let mut packets: Vec<(usize, RawPacket)> = Vec::new();
         for i in 0..self.clients.len() {
-            self.clients[i].process().await?;
-            if self.clients[i].state == ClientState::Disconnect {
-                let id = self.clients[i].id;
-                info!("Disconnecting client {}...", id);
-                self.clients.remove(i);
-                info!("Client {} disconnected!", id);
+            if let Some(client) = self.clients.get_mut(i) {
+                if let Some(raw_packet) = client.process().await? {
+                    packets.push((i, raw_packet.clone()));
+                }
+
+                // More efficient than broadcasting as we are already looping
+                for name in joined_names.iter() {
+                    self.clients[i].queue_packet(
+                        Packet::Notification(name.to_string())
+                    ).await;
+                }
+
+                if self.clients[i].state == ClientState::Disconnect {
+                    let id = self.clients[i].id;
+                    info!("Disconnecting client {}...", id);
+                    self.clients.remove(i);
+                    info!("Client {} disconnected!", id);
+                }
             }
+        }
+        for (i, packet) in packets {
+            self.parse_packet(i, packet).await?
+        }
+        Ok(())
+    }
+
+    async fn broadcast(&self, packet: Packet) {
+        for client in &self.clients {
+            client.queue_packet(packet.clone()).await;
+        }
+    }
+
+    async fn read_udp_packets(&self) -> Vec<RawPacket> {
+        let mut packets = Vec::new();
+        'read: loop {
+            let mut header = [0u8; 4];
+            let mut data = vec![0u8; 4096];
+            let mut data_size = 0;
+
+            match self.udp_socket.try_recv(&mut header) {
+                Ok(0) => {
+                    error!("UDP socket is readable, yet has 0 bytes to read!");
+                    break 'read;
+                },
+                Ok(n) => {},
+                Err(_) => break 'read,
+            }
+
+            match self.udp_socket.try_recv(&mut data) {
+                Ok(0) => {
+                    error!("UDP socket is readable, yet has 0 bytes to read!");
+                    break 'read;
+                },
+                Ok(n) => data_size = n,
+                Err(_) => break 'read,
+            }
+
+            packets.push(RawPacket {
+                header: data_size as u32,
+                data: data[..data_size].to_vec(),
+            })
+        }
+        packets
+    }
+
+    async fn parse_packet(&mut self, client_idx: usize, mut packet: RawPacket) -> anyhow::Result<()> {
+        if packet.data.len() > 0 {
+            let client = &mut self.clients[client_idx];
+
+            // Check if compressed
+            let mut is_compressed = false;
+            if packet.data.len() > 3 {
+                let string_data = String::from_utf8_lossy(&packet.data[..4]);
+                if string_data.starts_with("ABG:") {
+                    is_compressed = true;
+                    trace!("Packet is compressed!");
+                }
+            }
+
+            if is_compressed {
+                let compressed = &packet.data[4..];
+                let mut decompressed: Vec<u8> = Vec::with_capacity(100_000);
+                let mut decompressor = flate2::Decompress::new(true);
+                decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::None)?;
+                packet.data = decompressed;
+                let string_data = String::from_utf8_lossy(&packet.data[..]);
+                debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+            }
+
+            // Check packet identifier
+            let packet_identifier = packet.data[0] as char;
+            match packet_identifier {
+                'H' => {
+                    // Full sync with server
+                    client.queue_packet(Packet::Raw(RawPacket::from_str(&format!("Sn{}", client.info.as_ref().unwrap().username.clone())))).await;
+                    // TODO: Send vehicle data
+                },
+                'p' => {
+                    trace!("ping!");
+                    client.queue_packet(Packet::Raw(RawPacket::from_code('p'))).await;
+                },
+                'O' => self.parse_vehicle_packet(client_idx, packet).await?,
+                _ => {
+                    let string_data = String::from_utf8_lossy(&packet.data[..]);
+                    debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+                },
+            }
+        }
+        Ok(())
+    }
+
+    async fn parse_vehicle_packet(&mut self, client_idx: usize, packet: RawPacket) -> anyhow::Result<()> {
+        if packet.data.len() < 6 {
+            error!("Vehicle packet too small!");
+            return Ok(()); // TODO: Return error here
+        }
+        let code = packet.data[1] as char;
+        match code {
+            's' => {
+                let client = &mut self.clients[client_idx];
+                let car_json_str = String::from_utf8_lossy(&packet.data[6..]);
+                // let car_json: serde_json::Value = serde_json::from_str(&car_json_str)?;
+                let car_id = client.register_car(Car::new(car_json_str.to_string()));
+                let packet_data = format!("Os:{}:{}:{}:{}:{}", client.get_roles(), client.get_name(), client.get_id(), car_id, car_json_str);
+                self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data))).await;
+            },
+            _ => error!("Unknown vehicle related packet!"), // TODO: Return error here
         }
         Ok(())
     }

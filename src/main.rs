@@ -3,7 +3,7 @@ use log::LevelFilter;
 
 mod server;
 
-pub static mut MAP_NAME: &'static str = "west_coast_usa";
+pub static mut MAP_NAME: &'static str = "/levels/west_coast_usa/info.json";
 
 #[tokio::main]
 async fn main() {

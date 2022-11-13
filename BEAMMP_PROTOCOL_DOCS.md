@@ -22,11 +22,28 @@ All packets start with a single character, denoted as "Packet Code" or simply "C
 Example:
 | Code | Dir | Explanation |
 | ---- | --- | ----------- |
-| `C` | S->C | Client version during authentication only |
+| `C` | C->S | Client version during authentication only |
+
+### Uncategorized
+| Code | Dir | Explanation |
+| ---- | --- | ----------- |
+| `J` | S->C | Show a message in the top left on the clients screen |
 
 ### Authentication
 | Code | Dir | Explanation |
 | ---- | --- | ----------- |
-| `C` | S->C | Client version |
-| `D` | S->C | Start download phase |
+| `C` | C->S | Client version |
+| `D` | C->S | Start download phase? Seems unused from testing |
 | `P` | S->C | Send client their assigned ID |
+
+### Syncing resources
+| Code | Dir | Explanation |
+| ---- | --- | ----------- |
+| `SR` | C->S | Client requests a list containing all mods, containing their name and file size |
+| `f` | S->C | Server sends file data as a string? |
+| `-` | S->C | Technically not a packet, see [Syncing Resources](https://github.com/Lucky4Luuk/beammp_rust_server/blob/master/BEAMMP_PROTOCOL_DOCS.md#syncing-resources), step 2.
+
+### Syncing client state
+| Code | Dir | Explanation |
+| ---- | --- | ----------- |
+| `H` | C->S | Client requests a full sync with the server state |

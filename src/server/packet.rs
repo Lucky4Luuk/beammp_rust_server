@@ -1,10 +1,29 @@
+#[derive(Clone)]
 pub enum Packet {
     Raw(RawPacket),
+    Notification(String),
+}
+
+impl Packet {
+    pub fn get_header(&self) -> u32 {
+        match self {
+            Self::Raw(raw) => raw.header,
+            Self::Notification(msg) => format!("J{}", msg).as_bytes().len() as u32,
+        }
+    }
+
+    pub fn get_data(&self) -> &[u8] {
+        match self {
+            Self::Raw(raw) => &raw.data,
+            Self::Notification(msg) => msg.as_bytes()
+        }
+    }
 }
 
 /// Protocol:
 /// Header: 4 bytes, contains data size
 /// Data: Contains packet data
+#[derive(Clone)]
 pub struct RawPacket {
     pub header: u32,
     pub data: Vec<u8>,

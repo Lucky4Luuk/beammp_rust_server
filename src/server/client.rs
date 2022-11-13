@@ -6,6 +6,7 @@ use tokio::net::{TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::task::JoinHandle;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc::{Sender, Receiver};
 
 use glam::*;
 
@@ -13,6 +14,7 @@ use serde::Deserialize;
 
 use super::packet::*;
 use super::backend::*;
+use super::car::*;
 
 static ATOMIC_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -20,7 +22,7 @@ static ATOMIC_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
 pub enum ClientState {
     None,
     Connecting,
-    Syncing,
+    SyncingResources,
     Disconnect,
 }
 
@@ -41,10 +43,11 @@ pub struct Client {
     socket: OwnedReadHalf,
     write_half: Arc<Mutex<OwnedWriteHalf>>,
     write_runtime: JoinHandle<()>,
-    write_runtime_sender: tokio::sync::mpsc::Sender<Packet>,
+    write_runtime_sender: Sender<Packet>,
 
     pub state: ClientState,
     pub info: Option<UserData>,
+    pub cars: Vec<(usize, Car)>,
 }
 
 impl Drop for Client {
@@ -58,7 +61,7 @@ impl Client {
         let id = ATOMIC_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
 
         let (read_half, write_half) = socket.into_split();
-        let (tx, mut rx) = tokio::sync::mpsc::channel(128);
+        let (tx, mut rx): (Sender<Packet>, Receiver<Packet>) = tokio::sync::mpsc::channel(128);
         let write_half = Arc::new(Mutex::new(write_half));
         let write_half_ref = Arc::clone(&write_half);
         let handle: JoinHandle<()> = tokio::spawn(async move {
@@ -68,18 +71,8 @@ impl Client {
                     let mut lock = write_half_ref.lock().await;
                     if let Err(e) = lock.writable().await { error!("{:?}", e); }
                     trace!("Runtime sending packet!");
-                    let raw_data: Box<[u8]>;
-                    let header: u32;
-                    match packet {
-                        Packet::Raw(packet) => {
-                            header = packet.header;
-                            raw_data = packet.data.into_boxed_slice();
-                        },
-                        _ => {
-                            error!("Attempting to send unknown packet!");
-                            continue;
-                        },
-                    };
+                    let raw_data: &[u8] = packet.get_data();
+                    let header: u32 = packet.get_header();
                     if let Err(e) = lock.write(&header.to_le_bytes()).await { error!("{:?}", e); }
                     if let Err(e) = lock.write(&raw_data).await { error!("{:?}", e); }
                     trace!("Runtime sent packet!");
@@ -99,6 +92,7 @@ impl Client {
 
             state: ClientState::Connecting,
             info: None,
+            cars: Vec::new(),
         }
     }
 
@@ -119,25 +113,10 @@ impl Client {
                 let packet = self.read_packet_waiting().await?;
                 debug!("{:?}", packet);
             },
-            // 'D' => {
-            //     trace!("Download packet");
-            //     todo!("Implement downloading phase");
-            // },
-            // 'P' => {
-            //     self.queue_packet(Packet::Raw(RawPacket::from_code('P'))).await;
-            // },
             _ => return Err(ClientError::AuthenticateError.into()),
         }
 
         self.write_packet(Packet::Raw(RawPacket::from_code('S'))).await?;
-        // self.write_packet(Packet::Raw(RawPacket {
-        //     header: ['P' as u8, 5, 0, 0],
-        //     data: self.id.to_string().into_bytes(),
-        // })).await.map_err(|e| { error!("{:?}", e); e })?;
-        // self.write_packet(Packet::Raw(RawPacket {
-        //     header: ['M' as u8, 5, 0, 0],
-        //     data: crate::get_map_name().into_bytes(),
-        // })).await.map_err(|e| { error!("{:?}", e); e })?;
 
         self.socket.readable().await?;
         if let Some(packet) = self.read_packet_waiting().await? {
@@ -157,7 +136,7 @@ impl Client {
 
         self.write_packet(Packet::Raw(RawPacket::from_str(&format!("P{}", self.id)))).await?;
 
-        self.state = ClientState::Syncing;
+        self.state = ClientState::SyncingResources;
 
         debug!("Authentication of client {} succesfully completed! Syncing now...", self.id);
         self.sync().await?;
@@ -167,7 +146,7 @@ impl Client {
 
     // TODO: https://github.com/BeamMP/BeamMP-Server/blob/master/src/TNetwork.cpp#L619
     pub async fn sync(&mut self) -> anyhow::Result<()> {
-        'syncing: while self.state == ClientState::Syncing {
+        'syncing: while self.state == ClientState::SyncingResources {
             self.socket.readable().await?;
             if let Some(packet) = self.read_packet().await? {
                 if packet.data.len() == 0 { continue; }
@@ -188,19 +167,21 @@ impl Client {
             }
         }
         self.state = ClientState::None;
-        trace!("Done syncing!");
+        trace!("Done syncing! Sending map name...");
+        self.write_packet(Packet::Raw(RawPacket::from_str(&format!("M{}", crate::get_map_name())))).await?;
+        trace!("Map name sent!");
         Ok(())
     }
 
     /// This function should never block. It should simply check if there's a
     /// packet, and then and only then should it read it. If this were to block, the server
     /// would come to a halt until this function unblocks.
-    pub async fn process(&mut self) -> anyhow::Result<()> {
+    pub async fn process(&mut self) -> anyhow::Result<Option<RawPacket>> {
         if let Some(packet) = self.read_packet().await? {
             debug!("Packet: {:?}", packet);
-            self.parse_packet(packet).await?;
+            return Ok(Some(packet));
         }
-        Ok(())
+        Ok(None)
     }
 
     pub fn disconnect(&mut self) {
@@ -214,15 +195,25 @@ impl Client {
         self.queue_packet(Packet::Raw(RawPacket::from_str(&format!("K{}", msg)))).await;
     }
 
-    async fn parse_packet(&mut self, packet: RawPacket) -> anyhow::Result<()> {
-        if packet.data.len() > 0 {
-            let packet_identifier = packet.data[0] as char;
-            let string_data = String::from_utf8_lossy(&packet.data[..]);
-            match packet_identifier {
-                _ => debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header),
-            }
+    pub fn get_name(&self) -> &str {
+        &self.info.as_ref().unwrap().username
+    }
+
+    pub fn get_id(&self) -> u32 {
+        self.id
+    }
+
+    pub fn get_roles(&self) -> &str {
+        &self.info.as_ref().unwrap().roles
+    }
+
+    pub fn register_car(&mut self, car: Car) -> usize {
+        let mut free_num = 0;
+        for (num, _) in &self.cars {
+            if num == &free_num { free_num += 1; } else { break; }
         }
-        Ok(())
+        self.cars.push((free_num, car));
+        free_num
     }
 
     async fn read_raw(&mut self, count: usize) -> anyhow::Result<Vec<u8>> {
@@ -261,7 +252,7 @@ impl Client {
             Err(e) => return Err(e.into()),
         }
 
-        let mut data = vec![0u8; 1024];
+        let mut data = vec![0u8; 4096];
         let data_size;
         match self.socket.try_read(&mut data) {
             Ok(0) => {
@@ -289,18 +280,8 @@ impl Client {
         let mut lock = self.write_half.lock().await;
         lock.writable().await?;
         trace!("Sending packet!");
-        let raw_data: Box<[u8]>;
-        let header: u32;
-        match packet {
-            Packet::Raw(packet) => {
-                header = packet.header;
-                raw_data = packet.data.into_boxed_slice();
-            },
-            _ => {
-                error!("Attempting to send unknown packet!");
-                return Err(ClientError::WritePacketError.into());
-            },
-        };
+        let raw_data: &[u8] = packet.get_data();
+        let header: u32 = packet.get_header();
         lock.write(&header.to_le_bytes()).await?;
         lock.write(&raw_data).await?;
         trace!("Packet sent!");
@@ -308,14 +289,14 @@ impl Client {
         Ok(())
     }
 
-    async fn queue_packet(&mut self, packet: Packet) {
-        self.write_runtime_sender.send(packet).await;
+    pub async fn queue_packet(&self, packet: Packet) {
+        // TODO: If packet gets lost, put it back at the front of the queue?
+        let _ = self.write_runtime_sender.send(packet).await;
     }
 }
 
 #[derive(Debug)]
 pub enum ClientError {
-    WritePacketError,
     AuthenticateError,
     ConnectionTimeout,
 }
