@@ -20,6 +20,7 @@ static ATOMIC_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
 pub enum ClientState {
     None,
     Connecting,
+    Syncing,
     Disconnect,
 }
 
@@ -29,6 +30,8 @@ pub struct UserData {
     pub guest: bool,
     pub roles: String,
     pub username: String,
+
+    pub identifiers: Vec<String>,
 }
 
 pub struct Client {
@@ -44,11 +47,17 @@ pub struct Client {
     pub info: Option<UserData>,
 }
 
+impl Drop for Client {
+    fn drop(&mut self) {
+        self.write_runtime.abort();
+    }
+}
+
 impl Client {
     pub fn new(socket: TcpStream, ip: String) -> Self {
         let id = ATOMIC_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
 
-        let (read_half, mut write_half) = socket.into_split();
+        let (read_half, write_half) = socket.into_split();
         let (tx, mut rx) = tokio::sync::mpsc::channel(128);
         let write_half = Arc::new(Mutex::new(write_half));
         let write_half_ref = Arc::clone(&write_half);
@@ -133,19 +142,52 @@ impl Client {
         self.socket.readable().await?;
         if let Some(packet) = self.read_packet_waiting().await? {
             debug!("packet: {:?}", packet);
+            if packet.data.len() > 50 {
+                self.kick("Player key too big!").await;
+                return Err(ClientError::AuthenticateError.into());
+            }
             let mut json = HashMap::new();
             json.insert("key".to_string(), packet.data_as_string());
             let user_data: UserData = authentication_request("pkToUser", json).await.map_err(|e| { error!("{:?}", e); e })?;
             debug!("user_data: {:?}", user_data);
             self.info = Some(user_data);
-            self.kick("Test").await;
         } else {
             self.kick("Client never sent public key! If this error persists, try restarting your game.").await;
         }
 
-        self.state = ClientState::None;
+        self.write_packet(Packet::Raw(RawPacket::from_str(&format!("P{}", self.id)))).await?;
 
-        debug!("Authentication of client {} succesfully completed!", self.id);
+        self.state = ClientState::Syncing;
+
+        debug!("Authentication of client {} succesfully completed! Syncing now...", self.id);
+        self.sync().await?;
+
+        Ok(())
+    }
+
+    pub async fn sync(&mut self) -> anyhow::Result<()> {
+        'syncing: while self.state == ClientState::Syncing {
+            self.socket.readable().await?;
+            if let Some(packet) = self.read_packet().await? {
+                if packet.data.len() == 0 { continue; }
+                if packet.data.len() == 4 {
+                    if packet.data == [68, 111, 110, 101] {
+                        break 'syncing;
+                    }
+                }
+                match packet.data[0] as char {
+                    'S' if packet.data.len() > 1 => {
+                        match packet.data[1] as char {
+                            'R' => self.write_packet(Packet::Raw(RawPacket::from_code('-'))).await?,
+                            _ => error!("Unknown packet! {:?}", packet),
+                        }
+                    },
+                    _ => error!("Unknown packet! {:?}", packet),
+                }
+            }
+        }
+        self.state = ClientState::None;
+        trace!("Done syncing!");
         Ok(())
     }
 
@@ -157,7 +199,6 @@ impl Client {
             debug!("Packet: {:?}", packet);
             self.parse_packet(packet).await?;
         }
-
         Ok(())
     }
 
@@ -173,11 +214,13 @@ impl Client {
     }
 
     async fn parse_packet(&mut self, packet: RawPacket) -> anyhow::Result<()> {
-        // let packet_identifier = packet.header[0] as char;
-        // let string_data = String::from_utf8_lossy(&packet.data[..]);
-        // match packet_identifier {
-        //     _ => debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header),
-        // }
+        if packet.data.len() > 0 {
+            let packet_identifier = packet.data[0] as char;
+            let string_data = String::from_utf8_lossy(&packet.data[..]);
+            match packet_identifier {
+                _ => debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header),
+            }
+        }
         Ok(())
     }
 
