@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
 
@@ -16,7 +16,7 @@ use super::packet::*;
 use super::backend::*;
 use super::car::*;
 
-static ATOMIC_ID_COUNTER: AtomicU32 = AtomicU32::new(0);
+static ATOMIC_ID_COUNTER: AtomicU8 = AtomicU8::new(0);
 
 #[derive(PartialEq)]
 pub enum ClientState {
@@ -37,7 +37,7 @@ pub struct UserData {
 }
 
 pub struct Client {
-    pub id: u32,
+    pub id: u8,
     ip: String,
 
     socket: OwnedReadHalf,
@@ -59,6 +59,7 @@ impl Drop for Client {
 impl Client {
     pub fn new(socket: TcpStream, ip: String) -> Self {
         let id = ATOMIC_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
+        trace!("Client with ID #{} created!", id);
 
         let (read_half, write_half) = socket.into_split();
         let (tx, mut rx): (Sender<Packet>, Receiver<Packet>) = tokio::sync::mpsc::channel(128);
@@ -199,7 +200,7 @@ impl Client {
         &self.info.as_ref().unwrap().username
     }
 
-    pub fn get_id(&self) -> u32 {
+    pub fn get_id(&self) -> u8 {
         self.id
     }
 

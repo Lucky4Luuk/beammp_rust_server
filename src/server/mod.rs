@@ -1,3 +1,4 @@
+use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use tokio::task::JoinHandle;
@@ -88,8 +89,20 @@ impl Server {
         }
 
         // Process UDP packets
-        for packet in self.read_udp_packets().await {
-            todo!("packet: {:?}", packet);
+        for (addr, packet) in self.read_udp_packets().await {
+            if packet.data.len() == 0 { continue; }
+            let id = packet.data[0] - 1; // Offset by 1
+            let data = packet.data[2..].to_vec();
+            let packet_processed = RawPacket {
+                header: data.len() as u32,
+                data: data,
+            };
+            'search: for i in 0..self.clients.len() {
+                if self.clients[i].id == id {
+                    self.parse_packet_udp(i, addr, packet_processed).await?;
+                    break 'search;
+                }
+            }
         }
 
         // Process all the clients (TCP)
@@ -127,37 +140,74 @@ impl Server {
         }
     }
 
-    async fn read_udp_packets(&self) -> Vec<RawPacket> {
+    async fn send_udp(&self, udp_addr: SocketAddr, packet: Packet) {
+        // self.udp_socket.send_to()
+    }
+
+    async fn read_udp_packets(&self) -> Vec<(SocketAddr, RawPacket)> {
         let mut packets = Vec::new();
         'read: loop {
-            let mut header = [0u8; 4];
             let mut data = vec![0u8; 4096];
-            let mut data_size = 0;
+            let data_size;
+            let data_addr;
 
-            match self.udp_socket.try_recv(&mut header) {
-                Ok(0) => {
+            match self.udp_socket.try_recv_from(&mut data) {
+                Ok((0, _)) => {
                     error!("UDP socket is readable, yet has 0 bytes to read!");
                     break 'read;
                 },
-                Ok(n) => {},
+                Ok((n, addr)) => (data_size, data_addr) = (n, addr),
                 Err(_) => break 'read,
             }
 
-            match self.udp_socket.try_recv(&mut data) {
-                Ok(0) => {
-                    error!("UDP socket is readable, yet has 0 bytes to read!");
-                    break 'read;
-                },
-                Ok(n) => data_size = n,
-                Err(_) => break 'read,
-            }
-
-            packets.push(RawPacket {
+            let packet = RawPacket {
                 header: data_size as u32,
                 data: data[..data_size].to_vec(),
-            })
+            };
+            debug!("udp packet: {:?}", packet);
+            packets.push((data_addr, packet));
         }
         packets
+    }
+
+    async fn parse_packet_udp(&mut self, client_idx: usize, udp_addr: SocketAddr, mut packet: RawPacket) -> anyhow::Result<()> {
+        if packet.data.len() > 0 {
+            let client = &mut self.clients[client_idx];
+
+            // Check if compressed
+            let mut is_compressed = false;
+            if packet.data.len() > 3 {
+                let string_data = String::from_utf8_lossy(&packet.data[..4]);
+                if string_data.starts_with("ABG:") {
+                    is_compressed = true;
+                    trace!("Packet is compressed!");
+                }
+            }
+
+            if is_compressed {
+                let compressed = &packet.data[4..];
+                let mut decompressed: Vec<u8> = Vec::with_capacity(100_000);
+                let mut decompressor = flate2::Decompress::new(true);
+                decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::None)?;
+                packet.data = decompressed;
+                let string_data = String::from_utf8_lossy(&packet.data[..]);
+                debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+            }
+
+            // Check packet identifier
+            let packet_identifier = packet.data[0] as char;
+            match packet_identifier {
+                'p' => {
+                    trace!("ping!");
+                    self.send_udp(udp_addr, Packet::Raw(RawPacket::from_code('p'))).await;
+                },
+                _ => {
+                    let string_data = String::from_utf8_lossy(&packet.data[..]);
+                    debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+                },
+            }
+        }
+        Ok(())
     }
 
     async fn parse_packet(&mut self, client_idx: usize, mut packet: RawPacket) -> anyhow::Result<()> {
@@ -191,10 +241,6 @@ impl Server {
                     // Full sync with server
                     client.queue_packet(Packet::Raw(RawPacket::from_str(&format!("Sn{}", client.info.as_ref().unwrap().username.clone())))).await;
                     // TODO: Send vehicle data
-                },
-                'p' => {
-                    trace!("ping!");
-                    client.queue_packet(Packet::Raw(RawPacket::from_code('p'))).await;
                 },
                 'O' => self.parse_vehicle_packet(client_idx, packet).await?,
                 _ => {
