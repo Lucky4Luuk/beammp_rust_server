@@ -35,10 +35,17 @@ impl Server {
                         info!("New client connected: {:?}", addr);
 
                         let mut client = Client::new(socket, addr.ip().to_string());
-                        if client.authenticate().await.is_ok() {
-                            let mut lock = clients_incoming_ref.lock().map_err(|e| error!("{:?}", e)).expect("Failed to acquire lock on mutex!");
-                            lock.push(client);
-                            drop(lock);
+                        match client.authenticate().await {
+                            Ok(_) => {
+                                let mut lock = clients_incoming_ref.lock().map_err(|e| error!("{:?}", e)).expect("Failed to acquire lock on mutex!");
+                                lock.push(client);
+                                drop(lock);
+                            },
+                            Err(e) => {
+                                error!("Authentication error occured, kicking player...");
+                                error!("{:?}", e);
+                                client.kick("Failed to authenticate player!").await;
+                            }
                         }
                     },
                     Err(e) => error!("Failed to accept incoming connection: {:?}", e),
@@ -62,9 +69,11 @@ impl Server {
         // more clients, but it will at least still process all other clients
         if let Ok(mut clients_incoming_lock) = self.clients_incoming.try_lock() {
             if clients_incoming_lock.len() > 0 {
+                trace!("Accepting {} incoming clients...", clients_incoming_lock.len());
                 for i in 0..clients_incoming_lock.len() {
                     self.clients.push(clients_incoming_lock.swap_remove(i));
                 }
+                trace!("Accepted incoming clients!");
             }
         }
 
@@ -79,5 +88,12 @@ impl Server {
             }
         }
         Ok(())
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        // Not sure how needed this is but it seems right?
+        self.connect_runtime_handle.abort();
     }
 }

@@ -8,9 +8,9 @@ Upon client connection:
 
 ### Authentication
 1. S->C - Client sends the server a single byte. The BeamMP source checks for 3 letters, but I only saw C
-2. S->C - Client sends a packet containing the client version.
+2. S->C - Client sends a packet containing the client version
 3. C->S - Server sends the server a regular packet containing only 1 byte: `S` (the ascii character)
-4. S->C - Client sends the server it's authentication code?
+4. S->C - Client sends the server its public key
 
 ## Packets
 All packets start with a single character, denoted as "Packet Code" or simply "Code" down below.
