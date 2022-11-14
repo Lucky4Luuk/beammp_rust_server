@@ -48,7 +48,7 @@ Example:
 | Code | Dir | Explanation | Data |
 | ---- | --- | ----------- | ---- |
 | `SR` | C->S | Client requests a list containing all mods, containing their name and file size | None |
-| `f` | S->C | Server sends file data as a string? | Unknown |
+| `f` | C->S | Client requests file with name | fcool_mod.zip |
 | `-` | S->C | Technically not a packet, see [Syncing Resources](https://github.com/Lucky4Luuk/beammp_rust_server/blob/master/BEAMMP_PROTOCOL_DOCS.md#syncing-resources), step 2. | * |
 
 #### Syncing client state
@@ -59,7 +59,8 @@ Example:
 ### Vehicle packets
 | Code | Dir | Explanation | Data |
 | ---- | --- | ----------- | ---- |
-| `Os` | C->S | Client informs server they are spawning a car | Ss???{car_json} |
+| `Os` | C->S | Client informs server they are spawning a car | Os:C_ID:{car_json} |
+| `Os` | S->C | Server sends this packet to all clients, informing them a client has spawned a car | Os:C_ROLES:C_NAME:C_ID-CAR_ID:CAR_JSON |
 
 ## UDP
 ### Packets

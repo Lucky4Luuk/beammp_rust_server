@@ -1,22 +1,31 @@
 #[derive(Clone)]
 pub enum Packet {
     Raw(RawPacket),
-    Notification(String),
+    Notification(NotificationPacket),
 }
 
 impl Packet {
     pub fn get_header(&self) -> u32 {
         match self {
             Self::Raw(raw) => raw.header,
-            Self::Notification(msg) => format!("J{}", msg).as_bytes().len() as u32,
+            Self::Notification(msg) => self.get_data().len() as u32,
         }
     }
 
     pub fn get_data(&self) -> &[u8] {
         match self {
             Self::Raw(raw) => &raw.data,
-            Self::Notification(msg) => msg.as_bytes()
+            Self::Notification(p) => p.0.as_bytes(),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct NotificationPacket(String);
+
+impl NotificationPacket {
+    pub fn new<S: Into<String>>(msg: S) -> Self {
+        Self(format!("J{}", msg.into()))
     }
 }
 

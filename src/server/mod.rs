@@ -88,7 +88,10 @@ impl Server {
             }
         }
 
+        // self.broadcast(Packet::Notification(String::from("test"))).await;
+
         // Process UDP packets
+        // TODO: Use a UDP addr -> client ID look up table
         for (addr, packet) in self.read_udp_packets().await {
             if packet.data.len() == 0 { continue; }
             let id = packet.data[0] - 1; // Offset by 1
@@ -116,7 +119,7 @@ impl Server {
                 // More efficient than broadcasting as we are already looping
                 for name in joined_names.iter() {
                     self.clients[i].queue_packet(
-                        Packet::Notification(name.to_string())
+                        Packet::Notification(NotificationPacket::new(format!("Welcome {}!", name.to_string())))
                     ).await;
                 }
 
@@ -169,6 +172,7 @@ impl Server {
             debug!("udp packet: {:?}", packet);
             packets.push((data_addr, packet));
         }
+        if packets.len() > 0 { trace!("UDP packets read: {}", packets.len()); }
         packets
     }
 
@@ -266,8 +270,11 @@ impl Server {
                 let car_json_str = String::from_utf8_lossy(&packet.data[6..]);
                 // let car_json: serde_json::Value = serde_json::from_str(&car_json_str)?;
                 let car_id = client.register_car(Car::new(car_json_str.to_string()));
-                let packet_data = format!("Os:{}:{}:{}:{}:{}", client.get_roles(), client.get_name(), client.get_id(), car_id, car_json_str);
-                self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data))).await;
+                let client_id = client.get_id();
+                let packet_data = format!("Os:{}:{}:{}-{}:{}", client.get_roles(), client.get_name(), client_id, car_id, car_json_str);
+                let response = RawPacket::from_str(&packet_data);
+                self.broadcast(Packet::Notification(NotificationPacket::new(format!("Client {} spawned a car (#{})!", client_id, car_id)))).await;
+                self.broadcast(Packet::Raw(response)).await;
             },
             _ => error!("Unknown vehicle related packet!"), // TODO: Return error here
         }

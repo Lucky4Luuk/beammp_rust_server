@@ -72,9 +72,8 @@ impl Client {
                     let mut lock = write_half_ref.lock().await;
                     if let Err(e) = lock.writable().await { error!("{:?}", e); }
                     trace!("Runtime sending packet!");
-                    let raw_data: &[u8] = packet.get_data();
-                    let header: u32 = packet.get_header();
-                    if let Err(e) = lock.write(&header.to_le_bytes()).await { error!("{:?}", e); }
+                    let mut raw_data: Vec<u8> = packet.get_header().to_le_bytes().to_vec();
+                    raw_data.extend_from_slice(packet.get_data());
                     if let Err(e) = lock.write(&raw_data).await { error!("{:?}", e); }
                     trace!("Runtime sent packet!");
                     drop(lock);
@@ -281,10 +280,9 @@ impl Client {
         let mut lock = self.write_half.lock().await;
         lock.writable().await?;
         trace!("Sending packet!");
-        let raw_data: &[u8] = packet.get_data();
-        let header: u32 = packet.get_header();
-        lock.write(&header.to_le_bytes()).await?;
-        lock.write(&raw_data).await?;
+        let mut raw_data: Vec<u8> = packet.get_header().to_le_bytes().to_vec();
+        raw_data.extend_from_slice(packet.get_data());
+        if let Err(e) = lock.write(&raw_data).await { error!("{:?}", e); }
         trace!("Packet sent!");
         drop(lock);
         Ok(())
