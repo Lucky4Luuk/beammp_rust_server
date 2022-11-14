@@ -12,7 +12,7 @@ mod ui;
 #[derive(FromArgs)]
 /// cli options
 struct Options {
-    /// headless, no ui
+    /// headless (no ui)
     #[argh(switch, short = 'h')]
     headless: bool,
 }
@@ -46,7 +46,6 @@ async fn main_headless() {
 
 #[tokio::main]
 async fn main_ui() {
-    // pretty_env_logger::formatted_timed_builder().filter_level(LevelFilter::max()).init();
     tui_logger::init_logger(LevelFilter::max()).expect("Failed to initialize tui logger!");
     tui_logger::set_default_level(LevelFilter::max());
     debug!("Hello, server!");
@@ -65,24 +64,4 @@ async fn main_ui() {
     loop {
         server.process().await.map_err(|e| error!("{:?}", e)).expect("Failed to process events!");
     }
-
-    // let server_handle = tokio::spawn(async move {
-    //     let mut server = server::Server::new(user_config_ref).await.map_err(|e| error!("{:?}", e)).expect("Failed to start server!");
-    //     loop {
-    //         server.process().await.map_err(|e| error!("{:?}", e)).expect("Failed to process events!");
-    //     }
-    // });
-    //
-    // server_handle.await.expect("wah");
-
-    // let handle = std::thread::spawn(move || {
-    //     let mut runtime = tokio::runtime::Runtime::new().expect("Failed to create runtime!");
-    //     runtime.spawn(async move {
-    //         let mut server = server::Server::new(user_config_ref).await.map_err(|e| error!("{:?}", e)).expect("Failed to start server!");
-    //         loop {
-    //             server.process().await.map_err(|e| error!("{:?}", e)).expect("Failed to process events!");
-    //         }
-    //     });
-    // });
-    // while !handle.is_finished() {}
 }
