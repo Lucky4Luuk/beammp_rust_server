@@ -141,7 +141,9 @@ impl Server {
     }
 
     async fn send_udp(&self, udp_addr: SocketAddr, packet: Packet) {
-        // self.udp_socket.send_to()
+        if let Err(e) = self.udp_socket.try_send_to(&packet.get_data(), udp_addr) {
+            error!("UDP Packet send error: {:?}", e);
+        }
     }
 
     async fn read_udp_packets(&self) -> Vec<(SocketAddr, RawPacket)> {
