@@ -1,0 +1,5 @@
+[network]
+port = 48901
+
+[game]
+map = "levels/west_coast_usa/info.json"

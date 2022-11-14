@@ -25,11 +25,12 @@ pub struct Server {
 }
 
 impl Server {
-    pub async fn new() -> anyhow::Result<Self> {
-        let tcp_listener = Arc::new(TcpListener::bind("0.0.0.0:48900").await?);
+    pub async fn new(port: u16) -> anyhow::Result<Self> {
+        let bind_addr = &format!("0.0.0.0:{}", port);
+        let tcp_listener = Arc::new(TcpListener::bind(bind_addr).await?);
         let tcp_listener_ref = Arc::clone(&tcp_listener);
 
-        let udp_socket = Arc::new(UdpSocket::bind("0.0.0.0:48900").await?);
+        let udp_socket = Arc::new(UdpSocket::bind(bind_addr).await?);
 
         let clients_incoming = Arc::new(Mutex::new(Vec::new()));
         let clients_incoming_ref = Arc::clone(&clients_incoming);

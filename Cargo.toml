@@ -18,3 +18,5 @@ serde_json = "*"
 
 glam = "0.22.0"
 flate2 = "1.0"
+
+toml = "0.5"
