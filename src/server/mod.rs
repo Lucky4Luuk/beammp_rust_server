@@ -14,6 +14,8 @@ pub use packet::*;
 pub use backend::*;
 pub use car::*;
 
+pub use crate::config::Config;
+
 pub struct Server {
     tcp_listener: Arc<TcpListener>,
     udp_socket: Arc<UdpSocket>,
@@ -22,10 +24,17 @@ pub struct Server {
     clients: Vec<Client>,
 
     connect_runtime_handle: JoinHandle<()>,
+
+    config: Arc<Config>,
 }
 
 impl Server {
-    pub async fn new(port: u16) -> anyhow::Result<Self> {
+    pub async fn new(config: Arc<Config>) -> anyhow::Result<Self> {
+        let config_ref = Arc::clone(&config);
+
+        let port = config.network.port.unwrap_or(48900);
+        debug!("Server started on port {}", port);
+
         let bind_addr = &format!("0.0.0.0:{}", port);
         let tcp_listener = Arc::new(TcpListener::bind(bind_addr).await?);
         let tcp_listener_ref = Arc::clone(&tcp_listener);
@@ -43,7 +52,7 @@ impl Server {
                         info!("New client connected: {:?}", addr);
 
                         let mut client = Client::new(socket, addr.ip().to_string());
-                        match client.authenticate().await {
+                        match client.authenticate(&config_ref).await {
                             Ok(_) => {
                                 let mut lock = clients_incoming_ref.lock().map_err(|e| error!("{:?}", e)).expect("Failed to acquire lock on mutex!");
                                 lock.push(client);
@@ -70,6 +79,8 @@ impl Server {
             clients: Vec::new(),
 
             connect_runtime_handle: connect_runtime_handle,
+
+            config: config,
         })
     }
 
@@ -197,15 +208,14 @@ impl Server {
                 let mut decompressor = flate2::Decompress::new(true);
                 decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::None)?;
                 packet.data = decompressed;
-                let string_data = String::from_utf8_lossy(&packet.data[..]);
-                debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+                // let string_data = String::from_utf8_lossy(&packet.data[..]);
+                // debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
             }
 
             // Check packet identifier
             let packet_identifier = packet.data[0] as char;
             match packet_identifier {
                 'p' => {
-                    trace!("ping!");
                     self.send_udp(udp_addr, Packet::Raw(RawPacket::from_code('p'))).await;
                 },
                 _ => {
@@ -237,8 +247,8 @@ impl Server {
                 let mut decompressor = flate2::Decompress::new(true);
                 decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::None)?;
                 packet.data = decompressed;
-                let string_data = String::from_utf8_lossy(&packet.data[..]);
-                debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+                // let string_data = String::from_utf8_lossy(&packet.data[..]);
+                // debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
             }
 
             // Check packet identifier

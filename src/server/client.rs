@@ -96,7 +96,7 @@ impl Client {
         }
     }
 
-    pub async fn authenticate(&mut self) -> anyhow::Result<()> {
+    pub async fn authenticate(&mut self, config: &super::Config) -> anyhow::Result<()> {
         debug!("Authenticating client {}...", self.id);
 
         self.socket.readable().await?;
@@ -139,13 +139,13 @@ impl Client {
         self.state = ClientState::SyncingResources;
 
         debug!("Authentication of client {} succesfully completed! Syncing now...", self.id);
-        self.sync().await?;
+        self.sync(config).await?;
 
         Ok(())
     }
 
     // TODO: https://github.com/BeamMP/BeamMP-Server/blob/master/src/TNetwork.cpp#L619
-    pub async fn sync(&mut self) -> anyhow::Result<()> {
+    pub async fn sync(&mut self, config: &super::Config) -> anyhow::Result<()> {
         'syncing: while self.state == ClientState::SyncingResources {
             self.socket.readable().await?;
             if let Some(packet) = self.read_packet().await? {
@@ -168,7 +168,7 @@ impl Client {
         }
         self.state = ClientState::None;
         trace!("Done syncing! Sending map name...");
-        self.write_packet(Packet::Raw(RawPacket::from_str(&format!("M{}", crate::get_map_name())))).await?;
+        self.write_packet(Packet::Raw(RawPacket::from_str(&format!("M{}", config.game.map)))).await?;
         trace!("Map name sent!");
         Ok(())
     }

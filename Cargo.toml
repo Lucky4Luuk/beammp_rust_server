@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 log = "0.4"
 pretty_env_logger = "0.4.0"
+argh = "0.1.9"
 anyhow = "1.0.66"
 
 tokio = { version = "1", features = ["macros", "rt", "rt-multi-thread", "net", "io-util", "sync"] }
@@ -20,3 +21,9 @@ glam = "0.22.0"
 flate2 = "1.0"
 
 toml = "0.5"
+
+# UI
+crossterm = "0.25"
+tui = { version = "0.19", default-features = false, features = ["crossterm"] }
+tui-logger = "0.8"
+better-panic = "0.3"
