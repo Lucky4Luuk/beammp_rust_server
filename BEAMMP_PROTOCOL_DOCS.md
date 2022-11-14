@@ -25,7 +25,7 @@ Upon client connection:
 
 ### Packets
 All packets start with a single character, denoted as "Packet Code" or simply "Code" down below.
-The data mentioned is merely example data, to show the data format
+The data mentioned is merely example data, to show the data format. This includes the code!
 Example:
 | Code | Dir | Explanation | Data |
 | ---- | --- | ----------- | ---- |
@@ -40,6 +40,7 @@ Example:
 | Code | Dir | Explanation | Data |
 | ---- | --- | ----------- | ---- |
 | `C` | C->S | Client version | VC2.0 |
+| `S` | S->C | Confirmation? | None |
 | `D` | C->S | Start download phase? Seems unused from testing | None |
 | `P` | S->C | Send client their assigned ID | P123 |
 
@@ -55,6 +56,15 @@ Example:
 | ---- | --- | ----------- | ---- |
 | `H` | C->S | Client requests a full sync with the server state | None |
 
+### Vehicle packets
+| Code | Dir | Explanation | Data |
+| ---- | --- | ----------- | ---- |
+| `Os` | C->S | Client informs server they are spawning a car | Ss???{car_json} |
+
 ## UDP
 ### Packets
 #### Uncategorized
+| Code | Dir | Explanation | Data |
+| ---- | --- | ----------- | ---- |
+| `p` | C->S | Ping! | None |
+| `p` | S->C | Pong! | None |
