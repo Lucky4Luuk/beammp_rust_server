@@ -181,10 +181,8 @@ impl Server {
                 header: data_size as u32,
                 data: data[..data_size].to_vec(),
             };
-            debug!("udp packet: {:?}", packet);
             packets.push((data_addr, packet));
         }
-        if packets.len() > 0 { trace!("UDP packets read: {}", packets.len()); }
         packets
     }
 
