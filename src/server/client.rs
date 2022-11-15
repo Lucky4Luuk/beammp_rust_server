@@ -1,3 +1,4 @@
+use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
@@ -56,6 +57,49 @@ impl Drop for Client {
     }
 }
 
+#[async_trait]
+trait Writable {
+    async fn writable(&self) -> std::io::Result<()>;
+}
+
+#[async_trait]
+impl Writable for TcpStream {
+    async fn writable(&self) -> std::io::Result<()> {
+        self.writable().await
+    }
+}
+
+#[async_trait]
+impl Writable for OwnedWriteHalf {
+    async fn writable(&self) -> std::io::Result<()> {
+        self.writable().await
+    }
+}
+
+async fn tcp_write<W: AsyncWriteExt + Writable + std::marker::Unpin>(w: &mut W, mut packet: Packet) -> anyhow::Result<()> {
+    let compressed = match packet.get_code() {
+        Some('O') => true,
+        Some('T') => true,
+        _ => packet.get_data().len() > 400,
+    };
+
+    if compressed {
+        let mut compressed: Vec<u8> = Vec::with_capacity(100_000);
+        let mut compressor = flate2::Compress::new(flate2::Compression::best(), true);
+        compressor.compress_vec(packet.get_data(), &mut compressed, flate2::FlushCompress::Sync)?;
+        let mut new_data = "ABG:".as_bytes().to_vec();
+        new_data.append(&mut compressed);
+        packet.set_data(new_data);
+    }
+
+    let mut raw_data: Vec<u8> = packet.get_header().to_le_bytes().to_vec();
+    raw_data.extend_from_slice(packet.get_data());
+
+    w.writable().await?;
+    w.write(&raw_data).await?;
+    Ok(())
+}
+
 impl Client {
     pub fn new(socket: TcpStream, ip: String) -> Self {
         let id = ATOMIC_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -70,11 +114,8 @@ impl Client {
                 if let Some(packet) = rx.recv().await {
                     trace!("Runtime received packet...");
                     let mut lock = write_half_ref.lock().await;
-                    if let Err(e) = lock.writable().await { error!("{:?}", e); }
                     trace!("Runtime sending packet!");
-                    let mut raw_data: Vec<u8> = packet.get_header().to_le_bytes().to_vec();
-                    raw_data.extend_from_slice(packet.get_data());
-                    if let Err(e) = lock.write(&raw_data).await { error!("{:?}", e); }
+                    if let Err(e) = tcp_write(lock.deref_mut(), packet).await { error!("{:?}", e); };
                     trace!("Runtime sent packet!");
                     drop(lock);
                 }
@@ -178,7 +219,6 @@ impl Client {
     /// would come to a halt until this function unblocks.
     pub async fn process(&mut self) -> anyhow::Result<Option<RawPacket>> {
         if let Some(packet) = self.read_packet().await? {
-            debug!("Packet: {:?}", packet);
             return Ok(Some(packet));
         }
         Ok(None)
@@ -280,9 +320,7 @@ impl Client {
         let mut lock = self.write_half.lock().await;
         lock.writable().await?;
         trace!("Sending packet!");
-        let mut raw_data: Vec<u8> = packet.get_header().to_le_bytes().to_vec();
-        raw_data.extend_from_slice(packet.get_data());
-        if let Err(e) = lock.write(&raw_data).await { error!("{:?}", e); }
+        if let Err(e) = tcp_write(lock.deref_mut(), packet).await { error!("{:?}", e); }
         trace!("Packet sent!");
         drop(lock);
         Ok(())

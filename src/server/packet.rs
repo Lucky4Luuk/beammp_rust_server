@@ -18,6 +18,20 @@ impl Packet {
             Self::Notification(p) => p.0.as_bytes(),
         }
     }
+
+    pub fn get_code(&self) -> Option<char> {
+        match self {
+            Self::Raw(raw) => raw.data.get(0).map(|c| *c as char),
+            Self::Notification(_) => Some('J'),
+        }
+    }
+
+    pub fn set_data(&mut self, data: Vec<u8>) {
+        match self {
+            Self::Raw(raw) => raw.data = data,
+            Self::Notification(_) => todo!(),
+        }
+    }
 }
 
 #[derive(Clone)]

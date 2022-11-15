@@ -1,8 +1,6 @@
 use std::sync::Arc;
 use std::io::stdout;
 
-use tokio::task::JoinHandle;
-
 use tui::{Terminal, Frame};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::layout::*;
@@ -17,12 +15,19 @@ mod communicator;
 use input::*;
 use communicator::*;
 
+static mut CONFIG: Option<Arc<Config>> = None;
+fn get_config() -> &'static Config {
+    unsafe { CONFIG.as_ref().unwrap() }
+}
+
 pub fn start(config: Arc<Config>) -> anyhow::Result<()> {
     std::panic::set_hook(Box::new(|panic_info| {
 		let _ = crossterm::terminal::disable_raw_mode();
 		better_panic::Settings::auto().create_panic_handler()(panic_info);
         std::process::exit(1);
 	}));
+
+    unsafe { CONFIG = Some(config); }
 
     let stdout = stdout();
     crossterm::terminal::enable_raw_mode()?;
@@ -78,6 +83,7 @@ fn draw<B: Backend>(rect: &mut Frame<B>) {
                 .border_type(BorderType::Plain),
         );
     rect.render_widget(title, chunks[0]);
+    draw_communicator(rect, body_chunks[0]);
     draw_logger(rect, body_chunks[1]);
 }
 
@@ -92,4 +98,30 @@ fn draw_logger<B: Backend>(rect: &mut Frame<B>, chunk: Rect) {
         .output_timestamp(Some("%F %H:%M:%S%.3f".to_string()))
         .style(Style::default().fg(Color::White).bg(Color::Black));
     rect.render_widget(logger_widget, chunk);
+}
+
+fn draw_communicator<B: Backend>(rect: &mut Frame<B>, chunk: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(30), Constraint::Percentage(40), Constraint::Percentage(30)].as_ref())
+        .split(chunk);
+    let config = get_config();
+
+    let info_text = format!("Port: {}\nMap: {}", config.network.port.unwrap_or(48900), config.game.map);
+    let info = Paragraph::new(info_text)
+        .block(
+            Block::default()
+                .title("Server Info")
+                .borders(Borders::ALL)
+        );
+    rect.render_widget(info, chunks[0]);
+
+    let players_items = [ListItem::new("[0] luuk-bepis"), ListItem::new("[1] luuk-bepis2"), ListItem::new("[2] youll-never-guess")];
+    let players_list = List::new(players_items)
+        .block(
+            Block::default()
+                .title("Player List")
+                .borders(Borders::ALL)
+        );
+    rect.render_widget(players_list, chunks[2]);
 }

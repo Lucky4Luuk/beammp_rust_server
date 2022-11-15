@@ -258,6 +258,11 @@ impl Server {
                     // TODO: Send vehicle data
                 },
                 'O' => self.parse_vehicle_packet(client_idx, packet).await?,
+                'C' => {
+                    // TODO: Chat filtering?
+                    self.broadcast(Packet::Notification(NotificationPacket::new(packet.data_as_string().clone()))).await;
+                    self.broadcast(Packet::Raw(packet)).await;
+                },
                 _ => {
                     let string_data = String::from_utf8_lossy(&packet.data[..]);
                     debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
