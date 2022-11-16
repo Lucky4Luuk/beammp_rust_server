@@ -1,6 +1,16 @@
 use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
 
 #[derive(PartialEq)]
+pub enum ServerEvent {
+
+}
+
+#[derive(PartialEq)]
+pub enum ServerCommand {
+    
+}
+
+#[derive(PartialEq)]
 pub enum UpdateResult {
     Continue,
     Exit,

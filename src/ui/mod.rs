@@ -1,6 +1,8 @@
 use std::sync::Arc;
 use std::io::stdout;
 
+use tokio::sync::mpsc::{Sender, Receiver};
+
 use tui::{Terminal, Frame};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::layout::*;
@@ -15,12 +17,14 @@ mod communicator;
 use input::*;
 use communicator::*;
 
+pub use communicator::{ServerEvent, ServerCommand};
+
 static mut CONFIG: Option<Arc<Config>> = None;
 fn get_config() -> &'static Config {
     unsafe { CONFIG.as_ref().unwrap() }
 }
 
-pub fn start(config: Arc<Config>) -> anyhow::Result<()> {
+pub fn start(config: Arc<Config>, rx_event: Receiver<ServerEvent>, tx_cmd: Sender<ServerCommand>) -> anyhow::Result<()> {
     std::panic::set_hook(Box::new(|panic_info| {
 		let _ = crossterm::terminal::disable_raw_mode();
 		better_panic::Settings::auto().create_panic_handler()(panic_info);

@@ -68,11 +68,11 @@ impl Client {
         let handle: JoinHandle<()> = tokio::spawn(async move {
             loop {
                 if let Some(packet) = rx.recv().await {
-                    trace!("Runtime received packet...");
+                    // trace!("Runtime received packet...");
                     let mut lock = write_half_ref.lock().await;
-                    trace!("Runtime sending packet!");
+                    // trace!("Runtime sending packet!");
                     if let Err(e) = tcp_write(lock.deref_mut(), packet).await { error!("{:?}", e); };
-                    trace!("Runtime sent packet!");
+                    // trace!("Runtime sent packet!");
                     drop(lock);
                 }
             }

@@ -151,8 +151,13 @@ impl Server {
         Ok(())
     }
 
-    async fn broadcast(&self, packet: Packet) {
+    async fn broadcast(&self, packet: Packet, owner: Option<u8>) {
         for client in &self.clients {
+            if let Some(id) = owner {
+                if id == client.id {
+                    continue;
+                }
+            }
             client.queue_packet(packet.clone()).await;
         }
     }
@@ -191,6 +196,7 @@ impl Server {
     async fn parse_packet_udp(&mut self, client_idx: usize, udp_addr: SocketAddr, mut packet: RawPacket) -> anyhow::Result<()> {
         if packet.data.len() > 0 {
             let client = &mut self.clients[client_idx];
+            let client_id = client.get_id();
 
             // Check if compressed
             let mut is_compressed = false;
@@ -215,38 +221,42 @@ impl Server {
 
             // Check packet identifier
             let packet_identifier = packet.data[0] as char;
-            match packet_identifier {
-                'p' => {
-                    self.send_udp(udp_addr, Packet::Raw(RawPacket::from_code('p'))).await;
-                },
-                'Z' => {
-                    if packet.data.len() < 7 {
-                        error!("Position packet too small!");
-                        return Err(ServerError::BrokenPacket.into());
-                    } else {
-                        let client_id = packet.data[3];
-                        let car_id = packet.data[5];
+            if packet.data[0] >= 86 && packet.data[0] <= 89 {
+                self.broadcast(Packet::Raw(packet), Some(client_id)).await;
+            } else {
+                match packet_identifier {
+                    'p' => {
+                        self.send_udp(udp_addr, Packet::Raw(RawPacket::from_code('p'))).await;
+                    },
+                    'Z' => {
+                        if packet.data.len() < 7 {
+                            error!("Position packet too small!");
+                            return Err(ServerError::BrokenPacket.into());
+                        } else {
+                            let client_id = packet.data[3];
+                            let car_id = packet.data[5];
 
-                        let pos_json = &packet.data[7..];
-                        let pos_data: TransformPacket = serde_json::from_str(&String::from_utf8_lossy(pos_json))?;
+                            let pos_json = &packet.data[7..];
+                            let pos_data: TransformPacket = serde_json::from_str(&String::from_utf8_lossy(pos_json))?;
 
-                        for client in &mut self.clients {
-                            if client.id == client_id {
-                                let car = client.get_car_mut(car_id).ok_or(ServerError::CarDoesntExist)?;
-                                car.pos = pos_data.pos.into();
-                                car.rot = Quat::from_xyzw(pos_data.rot[0], pos_data.rot[1], pos_data.rot[2], pos_data.rot[3]);
-                                car.vel = pos_data.vel.into();
-                                car.rvel = pos_data.rvel.into();
+                            for client in &mut self.clients {
+                                if client.id == client_id {
+                                    let car = client.get_car_mut(car_id).ok_or(ServerError::CarDoesntExist)?;
+                                    car.pos = pos_data.pos.into();
+                                    car.rot = Quat::from_xyzw(pos_data.rot[0], pos_data.rot[1], pos_data.rot[2], pos_data.rot[3]);
+                                    car.vel = pos_data.vel.into();
+                                    car.rvel = pos_data.rvel.into();
+                                }
                             }
-                        }
 
-                        self.broadcast(Packet::Raw(packet)).await;
-                    }
-                },
-                _ => {
-                    let string_data = String::from_utf8_lossy(&packet.data[..]);
-                    debug!("Unknown packet UDP - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
-                },
+                            self.broadcast(Packet::Raw(packet), Some(client_id)).await;
+                        }
+                    },
+                    _ => {
+                        let string_data = String::from_utf8_lossy(&packet.data[..]);
+                        debug!("Unknown packet UDP - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+                    },
+                }
             }
         }
         Ok(())
@@ -255,6 +265,7 @@ impl Server {
     async fn parse_packet(&mut self, client_idx: usize, mut packet: RawPacket) -> anyhow::Result<()> {
         if packet.data.len() > 0 {
             let client = &mut self.clients[client_idx];
+            let client_id = client.get_id();
 
             // Check if compressed
             let mut is_compressed = false;
@@ -278,23 +289,27 @@ impl Server {
             }
 
             // Check packet identifier
-            let packet_identifier = packet.data[0] as char;
-            match packet_identifier {
-                'H' => {
-                    // Full sync with server
-                    client.queue_packet(Packet::Raw(RawPacket::from_str(&format!("Sn{}", client.info.as_ref().unwrap().username.clone())))).await;
-                    // TODO: Send vehicle data
-                },
-                'O' => self.parse_vehicle_packet(client_idx, packet).await?,
-                'C' => {
-                    // TODO: Chat filtering?
-                    self.broadcast(Packet::Notification(NotificationPacket::new(packet.data_as_string().clone()))).await;
-                    self.broadcast(Packet::Raw(packet)).await;
-                },
-                _ => {
-                    let string_data = String::from_utf8_lossy(&packet.data[..]);
-                    debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
-                },
+            if packet.data[0] >= 86 && packet.data[0] <= 89 {
+                self.broadcast(Packet::Raw(packet), Some(client_id)).await;
+            } else {
+                let packet_identifier = packet.data[0] as char;
+                match packet_identifier {
+                    'H' => {
+                        // Full sync with server
+                        client.queue_packet(Packet::Raw(RawPacket::from_str(&format!("Sn{}", client.info.as_ref().unwrap().username.clone())))).await;
+                        // TODO: Send vehicle data
+                    },
+                    'O' => self.parse_vehicle_packet(client_idx, packet).await?,
+                    'C' => {
+                        // TODO: Chat filtering?
+                        self.broadcast(Packet::Notification(NotificationPacket::new(packet.data_as_string().clone())), None).await;
+                        self.broadcast(Packet::Raw(packet), None).await;
+                    },
+                    _ => {
+                        let string_data = String::from_utf8_lossy(&packet.data[..]);
+                        debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+                    },
+                }
             }
         }
         Ok(())
@@ -318,10 +333,10 @@ impl Server {
                 let packet_data = format!("Os:{}:{}:{}-{}:{}", client.get_roles(), client.get_name(), client_id, car_id, car_json_str);
                 // trace!("Outbound string: `{}`", packet_data);
                 let response = RawPacket::from_str(&packet_data);
-                self.broadcast(Packet::Notification(NotificationPacket::new(format!("Client {} spawned a car (#{})!", client_id, car_id)))).await;
-                self.broadcast(Packet::Raw(response)).await;
+                self.broadcast(Packet::Notification(NotificationPacket::new(format!("Client {} spawned a car (#{})!", client_id, car_id))), None).await;
+                self.broadcast(Packet::Raw(response), None).await;
             },
-            _ => error!("Unknown vehicle related packet!"), // TODO: Return error here
+            _ => error!("Unknown vehicle related packet!\n{:?}", packet), // TODO: Return error here
         }
         Ok(())
     }
