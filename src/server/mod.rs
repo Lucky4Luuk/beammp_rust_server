@@ -204,7 +204,8 @@ impl Server {
                 let compressed = &packet.data[4..];
                 let mut decompressed: Vec<u8> = Vec::with_capacity(100_000);
                 let mut decompressor = flate2::Decompress::new(true);
-                decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::None)?;
+                decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::Finish)?;
+                packet.header = decompressed.len() as u32;
                 packet.data = decompressed;
                 // let string_data = String::from_utf8_lossy(&packet.data[..]);
                 // debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
@@ -218,7 +219,7 @@ impl Server {
                 },
                 _ => {
                     let string_data = String::from_utf8_lossy(&packet.data[..]);
-                    debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
+                    debug!("Unknown packet UDP - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
                 },
             }
         }
@@ -235,7 +236,7 @@ impl Server {
                 let string_data = String::from_utf8_lossy(&packet.data[..4]);
                 if string_data.starts_with("ABG:") {
                     is_compressed = true;
-                    trace!("Packet is compressed!");
+                    // trace!("Packet is compressed!");
                 }
             }
 
@@ -243,7 +244,8 @@ impl Server {
                 let compressed = &packet.data[4..];
                 let mut decompressed: Vec<u8> = Vec::with_capacity(100_000);
                 let mut decompressor = flate2::Decompress::new(true);
-                decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::None)?;
+                decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::Finish)?;
+                packet.header = decompressed.len() as u32;
                 packet.data = decompressed;
                 // let string_data = String::from_utf8_lossy(&packet.data[..]);
                 // debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
@@ -281,11 +283,14 @@ impl Server {
         match code {
             's' => {
                 let client = &mut self.clients[client_idx];
-                let car_json_str = String::from_utf8_lossy(&packet.data[6..]);
+                // trace!("Packet string: `{}`", packet.data_as_string());
+                let split_data = packet.data_as_string().splitn(3, ':').map(|s| s.to_string()).collect::<Vec<String>>();
+                let car_json_str = &split_data.get(2).ok_or(std::fmt::Error)?;
                 // let car_json: serde_json::Value = serde_json::from_str(&car_json_str)?;
                 let car_id = client.register_car(Car::new(car_json_str.to_string()));
                 let client_id = client.get_id();
                 let packet_data = format!("Os:{}:{}:{}-{}:{}", client.get_roles(), client.get_name(), client_id, car_id, car_json_str);
+                // trace!("Outbound string: `{}`", packet_data);
                 let response = RawPacket::from_str(&packet_data);
                 self.broadcast(Packet::Notification(NotificationPacket::new(format!("Client {} spawned a car (#{})!", client_id, car_id)))).await;
                 self.broadcast(Packet::Raw(response)).await;

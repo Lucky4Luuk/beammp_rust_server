@@ -87,8 +87,9 @@ async fn tcp_write<W: AsyncWriteExt + Writable + std::marker::Unpin>(w: &mut W, 
         let mut compressed: Vec<u8> = Vec::with_capacity(100_000);
         let mut compressor = flate2::Compress::new(flate2::Compression::best(), true);
         compressor.compress_vec(packet.get_data(), &mut compressed, flate2::FlushCompress::Sync)?;
-        let mut new_data = "ABG:".as_bytes().to_vec();
+        let mut new_data = "ABG:".as_bytes()[..4].to_vec();
         new_data.append(&mut compressed);
+        packet.set_header(new_data.len() as u32);
         packet.set_data(new_data);
     }
 

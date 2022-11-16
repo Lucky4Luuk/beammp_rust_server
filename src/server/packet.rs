@@ -32,6 +32,17 @@ impl Packet {
             Self::Notification(_) => todo!(),
         }
     }
+
+    pub fn set_header(&mut self, header: u32) {
+        match self {
+            Self::Raw(raw) => raw.header = header,
+            Self::Notification(_) => todo!(),
+        }
+    }
+
+    pub fn data_as_string(&self) -> String {
+        String::from_utf8_lossy(&self.get_data()).to_string()
+    }
 }
 
 #[derive(Clone)]
