@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::net::{TcpListener, UdpSocket};
 
+use glam::*;
+
 mod client;
 mod packet;
 mod backend;
@@ -51,7 +53,7 @@ impl Server {
                     Ok((socket, addr)) => {
                         info!("New client connected: {:?}", addr);
 
-                        let mut client = Client::new(socket, addr.ip().to_string());
+                        let mut client = Client::new(socket);
                         match client.authenticate(&config_ref).await {
                             Ok(_) => {
                                 let mut lock = clients_incoming_ref.lock().map_err(|e| error!("{:?}", e)).expect("Failed to acquire lock on mutex!");
@@ -217,6 +219,30 @@ impl Server {
                 'p' => {
                     self.send_udp(udp_addr, Packet::Raw(RawPacket::from_code('p'))).await;
                 },
+                'Z' => {
+                    if packet.data.len() < 7 {
+                        error!("Position packet too small!");
+                        return Err(ServerError::BrokenPacket.into());
+                    } else {
+                        let client_id = packet.data[3];
+                        let car_id = packet.data[5];
+
+                        let pos_json = &packet.data[7..];
+                        let pos_data: TransformPacket = serde_json::from_str(&String::from_utf8_lossy(pos_json))?;
+
+                        for client in &mut self.clients {
+                            if client.id == client_id {
+                                let car = client.get_car_mut(car_id).ok_or(ServerError::CarDoesntExist)?;
+                                car.pos = pos_data.pos.into();
+                                car.rot = Quat::from_xyzw(pos_data.rot[0], pos_data.rot[1], pos_data.rot[2], pos_data.rot[3]);
+                                car.vel = pos_data.vel.into();
+                                car.rvel = pos_data.rvel.into();
+                            }
+                        }
+
+                        self.broadcast(Packet::Raw(packet)).await;
+                    }
+                },
                 _ => {
                     let string_data = String::from_utf8_lossy(&packet.data[..]);
                     debug!("Unknown packet UDP - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
@@ -307,3 +333,18 @@ impl Drop for Server {
         self.connect_runtime_handle.abort();
     }
 }
+
+#[derive(Debug)]
+pub enum ServerError {
+    BrokenPacket,
+    CarDoesntExist,
+}
+
+impl std::fmt::Display for ServerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{:?}", self)?;
+        Ok(())
+    }
+}
+
+impl std::error::Error for ServerError {}

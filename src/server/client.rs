@@ -39,7 +39,6 @@ pub struct UserData {
 
 pub struct Client {
     pub id: u8,
-    ip: String,
 
     socket: OwnedReadHalf,
     write_half: Arc<Mutex<OwnedWriteHalf>>,
@@ -48,7 +47,7 @@ pub struct Client {
 
     pub state: ClientState,
     pub info: Option<UserData>,
-    pub cars: Vec<(usize, Car)>,
+    pub cars: Vec<(u8, Car)>,
 }
 
 impl Drop for Client {
@@ -57,52 +56,8 @@ impl Drop for Client {
     }
 }
 
-#[async_trait]
-trait Writable {
-    async fn writable(&self) -> std::io::Result<()>;
-}
-
-#[async_trait]
-impl Writable for TcpStream {
-    async fn writable(&self) -> std::io::Result<()> {
-        self.writable().await
-    }
-}
-
-#[async_trait]
-impl Writable for OwnedWriteHalf {
-    async fn writable(&self) -> std::io::Result<()> {
-        self.writable().await
-    }
-}
-
-async fn tcp_write<W: AsyncWriteExt + Writable + std::marker::Unpin>(w: &mut W, mut packet: Packet) -> anyhow::Result<()> {
-    let compressed = match packet.get_code() {
-        Some('O') => true,
-        Some('T') => true,
-        _ => packet.get_data().len() > 400,
-    };
-
-    if compressed {
-        let mut compressed: Vec<u8> = Vec::with_capacity(100_000);
-        let mut compressor = flate2::Compress::new(flate2::Compression::best(), true);
-        compressor.compress_vec(packet.get_data(), &mut compressed, flate2::FlushCompress::Sync)?;
-        let mut new_data = "ABG:".as_bytes()[..4].to_vec();
-        new_data.append(&mut compressed);
-        packet.set_header(new_data.len() as u32);
-        packet.set_data(new_data);
-    }
-
-    let mut raw_data: Vec<u8> = packet.get_header().to_le_bytes().to_vec();
-    raw_data.extend_from_slice(packet.get_data());
-
-    w.writable().await?;
-    w.write(&raw_data).await?;
-    Ok(())
-}
-
 impl Client {
-    pub fn new(socket: TcpStream, ip: String) -> Self {
+    pub fn new(socket: TcpStream) -> Self {
         let id = ATOMIC_ID_COUNTER.fetch_add(1, Ordering::SeqCst);
         trace!("Client with ID #{} created!", id);
 
@@ -125,7 +80,6 @@ impl Client {
 
         Self {
             id: id,
-            ip: ip,
 
             socket: read_half,
             write_half: write_half,
@@ -248,13 +202,22 @@ impl Client {
         &self.info.as_ref().unwrap().roles
     }
 
-    pub fn register_car(&mut self, car: Car) -> usize {
+    pub fn register_car(&mut self, car: Car) -> u8 {
         let mut free_num = 0;
         for (num, _) in &self.cars {
             if num == &free_num { free_num += 1; } else { break; }
         }
         self.cars.push((free_num, car));
         free_num
+    }
+
+    pub fn get_car_mut(&mut self, mut car_id: u8) -> Option<&mut Car> {
+        for (num, car) in &mut self.cars {
+            if num == &mut car_id {
+                return Some(car);
+            }
+        }
+        None
     }
 
     async fn read_raw(&mut self, count: usize) -> anyhow::Result<Vec<u8>> {
@@ -347,3 +310,47 @@ impl std::fmt::Display for ClientError {
 }
 
 impl std::error::Error for ClientError {}
+
+#[async_trait]
+trait Writable {
+    async fn writable(&self) -> std::io::Result<()>;
+}
+
+#[async_trait]
+impl Writable for TcpStream {
+    async fn writable(&self) -> std::io::Result<()> {
+        self.writable().await
+    }
+}
+
+#[async_trait]
+impl Writable for OwnedWriteHalf {
+    async fn writable(&self) -> std::io::Result<()> {
+        self.writable().await
+    }
+}
+
+async fn tcp_write<W: AsyncWriteExt + Writable + std::marker::Unpin>(w: &mut W, mut packet: Packet) -> anyhow::Result<()> {
+    let compressed = match packet.get_code() {
+        Some('O') => true,
+        Some('T') => true,
+        _ => packet.get_data().len() > 400,
+    };
+
+    if compressed {
+        let mut compressed: Vec<u8> = Vec::with_capacity(100_000);
+        let mut compressor = flate2::Compress::new(flate2::Compression::best(), true);
+        compressor.compress_vec(packet.get_data(), &mut compressed, flate2::FlushCompress::Sync)?;
+        let mut new_data = "ABG:".as_bytes()[..4].to_vec();
+        new_data.append(&mut compressed);
+        packet.set_header(new_data.len() as u32);
+        packet.set_data(new_data);
+    }
+
+    let mut raw_data: Vec<u8> = packet.get_header().to_le_bytes().to_vec();
+    raw_data.extend_from_slice(packet.get_data());
+
+    w.writable().await?;
+    w.write(&raw_data).await?;
+    Ok(())
+}

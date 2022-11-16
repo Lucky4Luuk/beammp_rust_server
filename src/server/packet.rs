@@ -1,3 +1,5 @@
+use serde::Deserialize;
+
 #[derive(Clone)]
 pub enum Packet {
     Raw(RawPacket),
@@ -52,6 +54,14 @@ impl NotificationPacket {
     pub fn new<S: Into<String>>(msg: S) -> Self {
         Self(format!("J{}", msg.into()))
     }
+}
+
+#[derive(Clone, Deserialize)]
+pub struct TransformPacket {
+    pub pos: [f32; 3],
+    pub rot: [f32; 4],
+    pub vel: [f32; 3],
+    pub rvel: [f32; 3],
 }
 
 /// Protocol:
