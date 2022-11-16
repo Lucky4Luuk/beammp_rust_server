@@ -69,3 +69,8 @@ Example:
 | ---- | --- | ----------- | ---- |
 | `p` | C->S | Ping! | None |
 | `p` | S->C | Pong! | None |
+
+#### Vehicle related
+| Code | Dir | Explanation | Data |
+| ---- | --- | ----------- | ---- |
+| `Zp` | C->S | Positional packet | Zp:C_ID-CAR_ID:{transform_json} |
