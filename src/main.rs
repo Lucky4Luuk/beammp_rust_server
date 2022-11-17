@@ -45,6 +45,7 @@ async fn main_headless() {
     }
 }
 
+// TODO: Move to ui/mod.rs
 #[tokio::main]
 async fn main_ui() {
     tui_logger::init_logger(LevelFilter::max()).expect("Failed to initialize tui logger!");
@@ -64,10 +65,37 @@ async fn main_ui() {
         ui::start(user_config, rx_event, tx_cmd).expect("Failed to run UI!");
     });
 
+    let mut id_name_list: Vec<(u8, server::UserData)> = Vec::new();
     let mut server = server::Server::new(user_config_ref).await.map_err(|e| error!("{:?}", e)).expect("Failed to start server!");
     loop {
         if let Err(e) = server.process().await {
             error!("{:?}", e);
         }
+
+        // Check if new clients
+        let update_clients = if id_name_list.len() != server.clients.len() {
+            true
+        } else {
+            if are_clients_same(&id_name_list, &server.clients) {
+                true
+            } else {
+                false
+            }
+        };
+
+        if update_clients {
+            id_name_list = Vec::new();
+            for client in &server.clients {
+                if let Some(info) = &client.info {
+                    id_name_list.push((client.id, info.clone()));
+                }
+            }
+            tx_event.send(ui::ServerEvent::ClientListUpdate(id_name_list.clone())).await;
+        }
     }
+}
+
+fn are_clients_same(a: &Vec<(u8, server::UserData)>, b: &Vec<server::Client>) -> bool {
+    let matching = a.iter().zip(b.iter()).filter(|&(a, b)| Some(&a.1) == b.info.as_ref() && a.0 == b.id).count();
+    matching == a.len() && matching == b.len()
 }

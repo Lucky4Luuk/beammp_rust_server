@@ -23,7 +23,7 @@ pub struct Server {
     udp_socket: Arc<UdpSocket>,
 
     clients_incoming: Arc<Mutex<Vec<Client>>>,
-    clients: Vec<Client>,
+    pub clients: Vec<Client>,
 
     connect_runtime_handle: JoinHandle<()>,
 

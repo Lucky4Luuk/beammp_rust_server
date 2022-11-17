@@ -40,7 +40,7 @@ pub fn start(config: Arc<Config>, rx_event: Receiver<ServerEvent>, tx_cmd: Sende
     terminal.clear()?;
     terminal.hide_cursor()?;
 
-    let mut communicator = Communicator::new();
+    let mut communicator = Communicator::new(rx_event, tx_cmd);
 
     let tick_rate = std::time::Duration::from_millis(200);
     let events = Events::new(tick_rate);

@@ -28,14 +28,12 @@ pub enum ClientState {
     Disconnect,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, PartialEq, Clone)]
 pub struct UserData {
     pub createdAt: String,
     pub guest: bool,
     pub roles: String,
     pub username: String,
-
-    pub identifiers: Vec<String>,
 }
 
 pub struct Client {

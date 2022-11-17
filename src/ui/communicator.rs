@@ -1,13 +1,15 @@
 use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
 
+use tokio::sync::mpsc::{Sender, Receiver};
+
 #[derive(PartialEq)]
 pub enum ServerEvent {
-
+    ClientListUpdate(Vec<(u8, crate::server::UserData)>),
 }
 
 #[derive(PartialEq)]
 pub enum ServerCommand {
-    
+
 }
 
 #[derive(PartialEq)]
@@ -17,13 +19,18 @@ pub enum UpdateResult {
 }
 
 pub struct Communicator {
+    pub id_name_list: Vec<(u8, crate::server::UserData)>,
 
+    rx_event: Receiver<ServerEvent>,
+    tx_cmd: Sender<ServerCommand>,
 }
 
 impl Communicator {
-    pub fn new() -> Self {
+    pub fn new(rx_event: Receiver<ServerEvent>, tx_cmd: Sender<ServerCommand>) -> Self {
         Self {
-
+            id_name_list: Vec::new(),
+            rx_event: rx_event,
+            tx_cmd: tx_cmd,
         }
     }
 
@@ -42,6 +49,8 @@ impl Communicator {
     }
 
     pub fn tick(&mut self) -> UpdateResult {
+        // TODO: Read events here
+
         UpdateResult::Continue
     }
 }
