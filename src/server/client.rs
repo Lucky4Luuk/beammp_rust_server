@@ -2,6 +2,7 @@ use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
 use tokio::net::{TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -39,6 +40,7 @@ pub struct UserData {
 
 pub struct Client {
     pub id: u8,
+    pub udp_addr: Option<SocketAddr>,
 
     socket: OwnedReadHalf,
     write_half: Arc<Mutex<OwnedWriteHalf>>,
@@ -80,6 +82,7 @@ impl Client {
 
         Self {
             id: id,
+            udp_addr: None,
 
             socket: read_half,
             write_half: write_half,

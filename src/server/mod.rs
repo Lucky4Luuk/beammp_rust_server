@@ -162,7 +162,21 @@ impl Server {
         }
     }
 
-    async fn send_udp(&self, udp_addr: SocketAddr, packet: Packet) {
+    async fn broadcast_udp(&self, packet: Packet, owner: Option<u8>) {
+        for client in &self.clients {
+            if let Some(id) = owner {
+                if id == client.id {
+                    continue;
+                }
+            }
+            // client.queue_packet(packet.clone()).await;
+            if let Some(udp_addr) = client.udp_addr {
+                self.send_udp(udp_addr, &packet).await;
+            }
+        }
+    }
+
+    async fn send_udp(&self, udp_addr: SocketAddr, packet: &Packet) {
         if let Err(e) = self.udp_socket.try_send_to(&packet.get_data(), udp_addr) {
             error!("UDP Packet send error: {:?}", e);
         }
@@ -198,6 +212,8 @@ impl Server {
             let client = &mut self.clients[client_idx];
             let client_id = client.get_id();
 
+            client.udp_addr = Some(udp_addr);
+
             // Check if compressed
             let mut is_compressed = false;
             if packet.data.len() > 3 {
@@ -222,11 +238,11 @@ impl Server {
             // Check packet identifier
             let packet_identifier = packet.data[0] as char;
             if packet.data[0] >= 86 && packet.data[0] <= 89 {
-                self.broadcast(Packet::Raw(packet), Some(client_id)).await;
+                self.broadcast_udp(Packet::Raw(packet), Some(client_id)).await;
             } else {
                 match packet_identifier {
                     'p' => {
-                        self.send_udp(udp_addr, Packet::Raw(RawPacket::from_code('p'))).await;
+                        self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_code('p'))).await;
                     },
                     'Z' => {
                         if packet.data.len() < 7 {
@@ -239,17 +255,23 @@ impl Server {
                             let pos_json = &packet.data[7..];
                             let pos_data: TransformPacket = serde_json::from_str(&String::from_utf8_lossy(pos_json))?;
 
-                            for client in &mut self.clients {
-                                if client.id == client_id {
+                            let p = Packet::Raw(packet);
+
+                            for i in 0..self.clients.len() {
+                                if self.clients[i].id == client_id {
+                                    let client = &mut self.clients[i];
                                     let car = client.get_car_mut(car_id).ok_or(ServerError::CarDoesntExist)?;
                                     car.pos = pos_data.pos.into();
                                     car.rot = Quat::from_xyzw(pos_data.rot[0], pos_data.rot[1], pos_data.rot[2], pos_data.rot[3]);
                                     car.vel = pos_data.vel.into();
                                     car.rvel = pos_data.rvel.into();
+                                } else {
+                                    let addr = self.clients[i].udp_addr;
+                                    if let Some(udp_addr) = addr {
+                                        self.send_udp(udp_addr, &p).await;
+                                    }
                                 }
                             }
-
-                            self.broadcast(Packet::Raw(packet), Some(client_id)).await;
                         }
                     },
                     _ => {
