@@ -3,7 +3,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct Config {
     pub network: NetworkSettings,
-    pub game: GameSettings
+    pub game: GameSettings,
 }
 
 #[derive(Deserialize)]

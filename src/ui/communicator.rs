@@ -1,6 +1,6 @@
-use crossterm::event::{KeyEvent, KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::mpsc::{Receiver, Sender};
 
 #[derive(PartialEq)]
 pub enum ServerEvent {
@@ -8,9 +8,7 @@ pub enum ServerEvent {
 }
 
 #[derive(PartialEq)]
-pub enum ServerCommand {
-
-}
+pub enum ServerCommand {}
 
 #[derive(PartialEq)]
 pub enum UpdateResult {
@@ -36,20 +34,24 @@ impl Communicator {
 
     pub fn handle_input(&mut self, input: KeyEvent) -> UpdateResult {
         match input.code {
-            KeyCode::Char('q') if input.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('c') if input.modifiers.contains(KeyModifiers::CONTROL) => {
                 return UpdateResult::Exit;
-            },
-            KeyCode::Char('c') => {
-                info!("C pressed!");
-            },
-            _ => {},
+            }
+            _ => {}
         }
 
         UpdateResult::Continue
     }
 
     pub fn tick(&mut self) -> UpdateResult {
-        // TODO: Read events here
+        if let Ok(event) = self.rx_event.try_recv() {
+            match event {
+                ServerEvent::ClientListUpdate(list) => self.id_name_list = list,
+            }
+        }
+
+        self.id_name_list
+            .sort_by(|(ida, _), (idb, _)| ida.partial_cmp(idb).unwrap());
 
         UpdateResult::Continue
     }

@@ -1,22 +1,25 @@
+use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
-use std::collections::HashMap;
-use std::net::SocketAddr;
 
-use tokio::net::{TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::task::JoinHandle;
+use tokio::net::{
+    tcp::{OwnedReadHalf, OwnedWriteHalf},
+    TcpStream,
+};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::task::JoinHandle;
 
 use glam::*;
 
 use serde::Deserialize;
 
-use super::packet::*;
 use super::backend::*;
 use super::car::*;
+use super::packet::*;
 
 static ATOMIC_ID_COUNTER: AtomicU8 = AtomicU8::new(0);
 
@@ -72,7 +75,9 @@ impl Client {
                     // trace!("Runtime received packet...");
                     let mut lock = write_half_ref.lock().await;
                     // trace!("Runtime sending packet!");
-                    if let Err(e) = tcp_write(lock.deref_mut(), packet).await { error!("{:?}", e); };
+                    if let Err(e) = tcp_write(lock.deref_mut(), packet).await {
+                        error!("{:?}", e);
+                    };
                     // trace!("Runtime sent packet!");
                     drop(lock);
                 }
@@ -110,11 +115,12 @@ impl Client {
                 self.socket.readable().await?;
                 let packet = self.read_packet_waiting().await?;
                 debug!("{:?}", packet);
-            },
+            }
             _ => return Err(ClientError::AuthenticateError.into()),
         }
 
-        self.write_packet(Packet::Raw(RawPacket::from_code('S'))).await?;
+        self.write_packet(Packet::Raw(RawPacket::from_code('S')))
+            .await?;
 
         self.socket.readable().await?;
         if let Some(packet) = self.read_packet_waiting().await? {
@@ -125,18 +131,31 @@ impl Client {
             }
             let mut json = HashMap::new();
             json.insert("key".to_string(), packet.data_as_string());
-            let user_data: UserData = authentication_request("pkToUser", json).await.map_err(|e| { error!("{:?}", e); e })?;
+            let user_data: UserData =
+                authentication_request("pkToUser", json)
+                    .await
+                    .map_err(|e| {
+                        error!("{:?}", e);
+                        e
+                    })?;
             debug!("user_data: {:?}", user_data);
             self.info = Some(user_data);
         } else {
-            self.kick("Client never sent public key! If this error persists, try restarting your game.").await;
+            self.kick(
+                "Client never sent public key! If this error persists, try restarting your game.",
+            )
+            .await;
         }
 
-        self.write_packet(Packet::Raw(RawPacket::from_str(&format!("P{}", self.id)))).await?;
+        self.write_packet(Packet::Raw(RawPacket::from_str(&format!("P{}", self.id))))
+            .await?;
 
         self.state = ClientState::SyncingResources;
 
-        debug!("Authentication of client {} succesfully completed! Syncing now...", self.id);
+        debug!(
+            "Authentication of client {} succesfully completed! Syncing now...",
+            self.id
+        );
         self.sync(config).await?;
 
         Ok(())
@@ -147,18 +166,21 @@ impl Client {
         'syncing: while self.state == ClientState::SyncingResources {
             self.socket.readable().await?;
             if let Some(packet) = self.read_packet().await? {
-                if packet.data.len() == 0 { continue; }
+                if packet.data.len() == 0 {
+                    continue;
+                }
                 if packet.data.len() == 4 {
                     if packet.data == [68, 111, 110, 101] {
                         break 'syncing;
                     }
                 }
                 match packet.data[0] as char {
-                    'S' if packet.data.len() > 1 => {
-                        match packet.data[1] as char {
-                            'R' => self.write_packet(Packet::Raw(RawPacket::from_code('-'))).await?,
-                            _ => error!("Unknown packet! {:?}", packet),
+                    'S' if packet.data.len() > 1 => match packet.data[1] as char {
+                        'R' => {
+                            self.write_packet(Packet::Raw(RawPacket::from_code('-')))
+                                .await?
                         }
+                        _ => error!("Unknown packet! {:?}", packet),
                     },
                     _ => error!("Unknown packet! {:?}", packet),
                 }
@@ -166,7 +188,11 @@ impl Client {
         }
         self.state = ClientState::None;
         trace!("Done syncing! Sending map name...");
-        self.write_packet(Packet::Raw(RawPacket::from_str(&format!("M{}", config.game.map)))).await?;
+        self.write_packet(Packet::Raw(RawPacket::from_str(&format!(
+            "M{}",
+            config.game.map
+        ))))
+        .await?;
         trace!("Map name sent!");
         Ok(())
     }
@@ -189,7 +215,9 @@ impl Client {
         // let _ = self.socket.writable().await;
         // let _ = self.write_packet(Packet::Raw(RawPacket::from_str(&format!("K{}", msg)))).await;
         // self.disconnect();
-        let _ = self.write_packet(Packet::Raw(RawPacket::from_str(&format!("K{}", msg)))).await;
+        let _ = self
+            .write_packet(Packet::Raw(RawPacket::from_str(&format!("K{}", msg))))
+            .await;
         self.disconnect();
     }
 
@@ -208,7 +236,11 @@ impl Client {
     pub fn register_car(&mut self, car: Car) -> u8 {
         let mut free_num = 0;
         for (num, _) in &self.cars {
-            if num == &free_num { free_num += 1; } else { break; }
+            if num == &free_num {
+                free_num += 1;
+            } else {
+                break;
+            }
         }
         self.cars.push((free_num, car));
         free_num
@@ -216,11 +248,12 @@ impl Client {
 
     pub fn unregister_car(&mut self, car_id: u8) {
         let prev_len = self.cars.len();
-        self.cars.retain(|(id, _)| {
-            id != &car_id
-        });
+        self.cars.retain(|(id, _)| id != &car_id);
         if prev_len == self.cars.len() {
-            error!("Failed to unregister car #{} for client #{}! Ignoring for now...", car_id, self.id);
+            error!(
+                "Failed to unregister car #{} for client #{}! Ignoring for now...",
+                car_id, self.id
+            );
         }
     }
 
@@ -261,11 +294,11 @@ impl Client {
                 error!("Socket is readable, yet has 0 bytes to read! Disconnecting client...");
                 self.disconnect();
                 return Ok(None);
-            },
-            Ok(_n) => {},
+            }
+            Ok(_n) => {}
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 return Ok(None);
-            },
+            }
             Err(e) => return Err(e.into()),
         }
 
@@ -276,13 +309,13 @@ impl Client {
                 error!("Socket is readable, yet has 0 bytes to read! Disconnecting client...");
                 self.disconnect();
                 return Ok(None);
-            },
+            }
             Ok(n) => data_size = n,
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 // debug!("Packet appears to be ready, yet can't be read yet!");
                 // self.socket.read(&mut data).await?;
                 return Ok(None);
-            },
+            }
             Err(e) => return Err(e.into()),
         }
 
@@ -297,7 +330,9 @@ impl Client {
         let mut lock = self.write_half.lock().await;
         lock.writable().await?;
         trace!("Sending packet!");
-        if let Err(e) = tcp_write(lock.deref_mut(), packet).await { error!("{:?}", e); }
+        if let Err(e) = tcp_write(lock.deref_mut(), packet).await {
+            error!("{:?}", e);
+        }
         trace!("Packet sent!");
         drop(lock);
         Ok(())
@@ -343,7 +378,10 @@ impl Writable for OwnedWriteHalf {
     }
 }
 
-async fn tcp_write<W: AsyncWriteExt + Writable + std::marker::Unpin>(w: &mut W, mut packet: Packet) -> anyhow::Result<()> {
+async fn tcp_write<W: AsyncWriteExt + Writable + std::marker::Unpin>(
+    w: &mut W,
+    mut packet: Packet,
+) -> anyhow::Result<()> {
     let compressed = match packet.get_code() {
         Some('O') => true,
         Some('T') => true,
@@ -353,7 +391,11 @@ async fn tcp_write<W: AsyncWriteExt + Writable + std::marker::Unpin>(w: &mut W, 
     if compressed {
         let mut compressed: Vec<u8> = Vec::with_capacity(100_000);
         let mut compressor = flate2::Compress::new(flate2::Compression::best(), true);
-        compressor.compress_vec(packet.get_data(), &mut compressed, flate2::FlushCompress::Sync)?;
+        compressor.compress_vec(
+            packet.get_data(),
+            &mut compressed,
+            flate2::FlushCompress::Sync,
+        )?;
         let mut new_data = "ABG:".as_bytes()[..4].to_vec();
         new_data.append(&mut compressed);
         packet.set_header(new_data.len() as u32);

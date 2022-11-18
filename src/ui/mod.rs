@@ -1,37 +1,43 @@
-use std::sync::Arc;
 use std::io::stdout;
+use std::sync::Arc;
 
-use tokio::sync::mpsc::{Sender, Receiver};
+use tokio::sync::mpsc::{Receiver, Sender};
 
-use tui::{Terminal, Frame};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::layout::*;
 use tui::style::*;
 use tui::widgets::*;
+use tui::{Frame, Terminal};
 
 use crate::config::Config;
 
-mod input;
 mod communicator;
+mod input;
 
-use input::*;
 use communicator::*;
+use input::*;
 
-pub use communicator::{ServerEvent, ServerCommand};
+pub use communicator::{ServerCommand, ServerEvent};
 
 static mut CONFIG: Option<Arc<Config>> = None;
 fn get_config() -> &'static Config {
     unsafe { CONFIG.as_ref().unwrap() }
 }
 
-pub fn start(config: Arc<Config>, rx_event: Receiver<ServerEvent>, tx_cmd: Sender<ServerCommand>) -> anyhow::Result<()> {
+pub fn start(
+    config: Arc<Config>,
+    rx_event: Receiver<ServerEvent>,
+    tx_cmd: Sender<ServerCommand>,
+) -> anyhow::Result<()> {
     std::panic::set_hook(Box::new(|panic_info| {
-		let _ = crossterm::terminal::disable_raw_mode();
-		better_panic::Settings::auto().create_panic_handler()(panic_info);
+        let _ = crossterm::terminal::disable_raw_mode();
+        better_panic::Settings::auto().create_panic_handler()(panic_info);
         std::process::exit(1);
-	}));
+    }));
 
-    unsafe { CONFIG = Some(config); }
+    unsafe {
+        CONFIG = Some(config);
+    }
 
     let stdout = stdout();
     crossterm::terminal::enable_raw_mode()?;
@@ -46,7 +52,7 @@ pub fn start(config: Arc<Config>, rx_event: Receiver<ServerEvent>, tx_cmd: Sende
     let events = Events::new(tick_rate);
 
     loop {
-        terminal.draw(|rect| draw(rect))?;
+        terminal.draw(|rect| draw(rect, &communicator))?;
 
         // Handle inputs
         let result = match events.next()? {
@@ -64,7 +70,7 @@ pub fn start(config: Arc<Config>, rx_event: Receiver<ServerEvent>, tx_cmd: Sende
     Ok(())
 }
 
-fn draw<B: Backend>(rect: &mut Frame<B>) {
+fn draw<B: Backend>(rect: &mut Frame<B>, communicator: &Communicator) {
     let size = rect.size();
 
     let chunks = Layout::default()
@@ -87,45 +93,48 @@ fn draw<B: Backend>(rect: &mut Frame<B>) {
                 .border_type(BorderType::Plain),
         );
     rect.render_widget(title, chunks[0]);
-    draw_communicator(rect, body_chunks[0]);
+    draw_communicator(rect, body_chunks[0], communicator);
     draw_logger(rect, body_chunks[1]);
 }
 
 fn draw_logger<B: Backend>(rect: &mut Frame<B>, chunk: Rect) {
     let logger_widget = tui_logger::TuiLoggerWidget::default()
-        .block(
-            Block::default()
-                .title("Logger")
-                .borders(Borders::ALL)
-        )
+        .block(Block::default().title("Logger").borders(Borders::ALL))
         .output_separator('|')
         .output_timestamp(Some("%F %H:%M:%S%.3f".to_string()))
         .style(Style::default().fg(Color::White).bg(Color::Black));
     rect.render_widget(logger_widget, chunk);
 }
 
-fn draw_communicator<B: Backend>(rect: &mut Frame<B>, chunk: Rect) {
+fn draw_communicator<B: Backend>(rect: &mut Frame<B>, chunk: Rect, communicator: &Communicator) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(40), Constraint::Percentage(30)].as_ref())
+        .constraints(
+            [
+                Constraint::Percentage(30),
+                Constraint::Percentage(40),
+                Constraint::Percentage(30),
+            ]
+            .as_ref(),
+        )
         .split(chunk);
     let config = get_config();
 
-    let info_text = format!("Port: {}\nMap: {}", config.network.port.unwrap_or(48900), config.game.map);
+    let info_text = format!(
+        "Port: {}\nMap: {}",
+        config.network.port.unwrap_or(48900),
+        config.game.map
+    );
     let info = Paragraph::new(info_text)
-        .block(
-            Block::default()
-                .title("Server Info")
-                .borders(Borders::ALL)
-        );
+        .block(Block::default().title("Server Info").borders(Borders::ALL));
     rect.render_widget(info, chunks[0]);
 
-    let players_items = [ListItem::new("[0] luuk-bepis"), ListItem::new("[1] luuk-bepis2"), ListItem::new("[2] youll-never-guess")];
-    let players_list = List::new(players_items)
-        .block(
-            Block::default()
-                .title("Player List")
-                .borders(Borders::ALL)
-        );
+    // let players_items = [ListItem::new("[0] luuk-bepis"), ListItem::new("[1] luuk-bepis2"), ListItem::new("[2] youll-never-guess")];
+    let mut players_items = Vec::new();
+    for (id, info) in communicator.id_name_list.iter() {
+        players_items.push(ListItem::new(format!("[{}] {}", id, info.username)));
+    }
+    let players_list =
+        List::new(players_items).block(Block::default().title("Player List").borders(Borders::ALL));
     rect.render_widget(players_list, chunks[2]);
 }

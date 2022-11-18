@@ -1,4 +1,4 @@
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub enum Packet {
@@ -96,7 +96,13 @@ impl RawPacket {
 
 impl std::fmt::Debug for RawPacket {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "Header: `{:?}` - Bytes: `{:?}` - String: `{}`", self.header, self.data, self.data_as_string())?;
+        write!(
+            f,
+            "Header: `{:?}` - Bytes: `{:?}` - String: `{}`",
+            self.header,
+            self.data,
+            self.data_as_string()
+        )?;
         Ok(())
     }
 }
@@ -111,7 +117,7 @@ pub struct RespawnPacketData {
 pub struct RespawnPacketDataPos {
     pub x: f64,
     pub y: f64,
-    pub z: f64
+    pub z: f64,
 }
 
 #[derive(Default, Serialize)]

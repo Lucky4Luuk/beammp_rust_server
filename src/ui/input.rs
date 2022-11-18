@@ -1,5 +1,5 @@
+use std::sync::mpsc::{channel, Receiver, RecvError, Sender};
 use std::time::Duration;
-use std::sync::mpsc::{Sender, Receiver, RecvError, channel};
 
 pub enum InputEvent {
     Input(crossterm::event::KeyEvent),

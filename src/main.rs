@@ -1,13 +1,15 @@
-#[macro_use] extern crate async_trait;
-#[macro_use] extern crate log;
+#[macro_use]
+extern crate async_trait;
+#[macro_use]
+extern crate log;
 use log::LevelFilter;
 
 use std::sync::Arc;
 
 use argh::FromArgs;
 
-mod server;
 mod config;
+mod server;
 mod ui;
 
 #[derive(FromArgs)]
@@ -30,16 +32,25 @@ fn main() {
 
 #[tokio::main]
 async fn main_headless() {
-    pretty_env_logger::formatted_timed_builder().filter_level(LevelFilter::max()).init();
+    pretty_env_logger::formatted_timed_builder()
+        .filter_level(LevelFilter::max())
+        .init();
     debug!("Hello, server!");
 
     let user_config: config::Config = toml::from_str(
-        &std::fs::read_to_string("config.toml").map_err(|_| error!("Failed to read config file!")).expect("Failed to read config file!")
-    ).map_err(|_| error!("Failed to parse config file!")).expect("Failed to parse config file!");
+        &std::fs::read_to_string("config.toml")
+            .map_err(|_| error!("Failed to read config file!"))
+            .expect("Failed to read config file!"),
+    )
+    .map_err(|_| error!("Failed to parse config file!"))
+    .expect("Failed to parse config file!");
     let user_config = Arc::new(user_config);
     let user_config_ref = Arc::clone(&user_config);
 
-    let mut server = server::Server::new(user_config_ref).await.map_err(|e| error!("{:?}", e)).expect("Failed to start server!");
+    let mut server = server::Server::new(user_config_ref)
+        .await
+        .map_err(|e| error!("{:?}", e))
+        .expect("Failed to start server!");
     loop {
         if let Err(e) = server.process().await {
             error!("{:?}", e);
@@ -58,8 +69,12 @@ async fn main_ui() {
     let (tx_cmd, rx_cmd) = tokio::sync::mpsc::channel::<ui::ServerCommand>(128);
 
     let user_config: config::Config = toml::from_str(
-        &std::fs::read_to_string("config.toml").map_err(|_| error!("Failed to read config file!")).expect("Failed to read config file!")
-    ).map_err(|_| error!("Failed to parse config file!")).expect("Failed to parse config file!");
+        &std::fs::read_to_string("config.toml")
+            .map_err(|_| error!("Failed to read config file!"))
+            .expect("Failed to read config file!"),
+    )
+    .map_err(|_| error!("Failed to parse config file!"))
+    .expect("Failed to parse config file!");
     let user_config = Arc::new(user_config);
     let user_config_ref = Arc::clone(&user_config);
 
@@ -68,7 +83,10 @@ async fn main_ui() {
     });
 
     let mut id_name_list: Vec<(u8, server::UserData)> = Vec::new();
-    let mut server = server::Server::new(user_config_ref).await.map_err(|e| error!("{:?}", e)).expect("Failed to start server!");
+    let mut server = server::Server::new(user_config_ref)
+        .await
+        .map_err(|e| error!("{:?}", e))
+        .expect("Failed to start server!");
     loop {
         if let Err(e) = server.process().await {
             error!("{:?}", e);
@@ -92,12 +110,16 @@ async fn main_ui() {
                     id_name_list.push((client.id, info.clone()));
                 }
             }
-            tx_event.send(ui::ServerEvent::ClientListUpdate(id_name_list.clone())).await;
+            tx_event.try_send(ui::ServerEvent::ClientListUpdate(id_name_list.clone()));
         }
     }
 }
 
 fn are_clients_same(a: &Vec<(u8, server::UserData)>, b: &Vec<server::Client>) -> bool {
-    let matching = a.iter().zip(b.iter()).filter(|&(a, b)| Some(&a.1) == b.info.as_ref() && a.0 == b.id).count();
+    let matching = a
+        .iter()
+        .zip(b.iter())
+        .filter(|&(a, b)| Some(&a.1) == b.info.as_ref() && a.0 == b.id)
+        .count();
     matching == a.len() && matching == b.len()
 }

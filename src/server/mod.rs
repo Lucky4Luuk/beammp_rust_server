@@ -1,20 +1,20 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use tokio::task::JoinHandle;
 use tokio::net::{TcpListener, UdpSocket};
+use tokio::task::JoinHandle;
 
 use glam::*;
 
-mod client;
-mod packet;
 mod backend;
 mod car;
+mod client;
+mod packet;
 
-pub use client::*;
-pub use packet::*;
 pub use backend::*;
 pub use car::*;
+pub use client::*;
+pub use packet::*;
 
 pub use crate::config::Config;
 
@@ -56,17 +56,20 @@ impl Server {
                         let mut client = Client::new(socket);
                         match client.authenticate(&config_ref).await {
                             Ok(_) => {
-                                let mut lock = clients_incoming_ref.lock().map_err(|e| error!("{:?}", e)).expect("Failed to acquire lock on mutex!");
+                                let mut lock = clients_incoming_ref
+                                    .lock()
+                                    .map_err(|e| error!("{:?}", e))
+                                    .expect("Failed to acquire lock on mutex!");
                                 lock.push(client);
                                 drop(lock);
-                            },
+                            }
                             Err(e) => {
                                 error!("Authentication error occured, kicking player...");
                                 error!("{:?}", e);
                                 client.kick("Failed to authenticate player!").await;
                             }
                         }
-                    },
+                    }
                     Err(e) => error!("Failed to accept incoming connection: {:?}", e),
                 }
             }
@@ -93,9 +96,19 @@ impl Server {
         let mut joined_names = Vec::new();
         if let Ok(mut clients_incoming_lock) = self.clients_incoming.try_lock() {
             if clients_incoming_lock.len() > 0 {
-                trace!("Accepting {} incoming clients...", clients_incoming_lock.len());
+                trace!(
+                    "Accepting {} incoming clients...",
+                    clients_incoming_lock.len()
+                );
                 for i in 0..clients_incoming_lock.len() {
-                    joined_names.push(clients_incoming_lock[i].info.as_ref().unwrap().username.clone());
+                    joined_names.push(
+                        clients_incoming_lock[i]
+                            .info
+                            .as_ref()
+                            .unwrap()
+                            .username
+                            .clone(),
+                    );
                     self.clients.push(clients_incoming_lock.swap_remove(i));
                 }
                 trace!("Accepted incoming clients!");
@@ -107,7 +120,9 @@ impl Server {
         // Process UDP packets
         // TODO: Use a UDP addr -> client ID look up table
         for (addr, packet) in self.read_udp_packets().await {
-            if packet.data.len() == 0 { continue; }
+            if packet.data.len() == 0 {
+                continue;
+            }
             let id = packet.data[0] - 1; // Offset by 1
             let data = packet.data[2..].to_vec();
             let packet_processed = RawPacket {
@@ -127,9 +142,11 @@ impl Server {
         for i in 0..self.clients.len() {
             if let Some(client) = self.clients.get_mut(i) {
                 match client.process().await {
-                    Ok(packet_opt) => if let Some(raw_packet) = packet_opt {
-                        packets.push((i, raw_packet.clone()));
-                    },
+                    Ok(packet_opt) => {
+                        if let Some(raw_packet) = packet_opt {
+                            packets.push((i, raw_packet.clone()));
+                        }
+                    }
                     Err(e) => client.kick(&format!("Kicked: {:?}", e)).await,
                 }
 
@@ -138,7 +155,8 @@ impl Server {
                     for j in 0..self.clients[i].cars.len() {
                         let car_id = self.clients[i].cars[j].0;
                         let delete_packet = format!("Od:{}-{}", id, car_id);
-                        self.broadcast(Packet::Raw(RawPacket::from_str(&delete_packet)), None).await;
+                        self.broadcast(Packet::Raw(RawPacket::from_str(&delete_packet)), None)
+                            .await;
                     }
                     info!("Disconnecting client {}...", id);
                     self.clients.remove(i);
@@ -147,9 +165,12 @@ impl Server {
 
                 // More efficient than broadcasting as we are already looping
                 for name in joined_names.iter() {
-                    self.clients[i].queue_packet(
-                        Packet::Notification(NotificationPacket::new(format!("Welcome {}!", name.to_string())))
-                    ).await;
+                    self.clients[i]
+                        .queue_packet(Packet::Notification(NotificationPacket::new(format!(
+                            "Welcome {}!",
+                            name.to_string()
+                        ))))
+                        .await;
                 }
             }
         }
@@ -201,7 +222,7 @@ impl Server {
                 Ok((0, _)) => {
                     error!("UDP socket is readable, yet has 0 bytes to read!");
                     break 'read;
-                },
+                }
                 Ok((n, addr)) => (data_size, data_addr) = (n, addr),
                 Err(_) => break 'read,
             }
@@ -215,7 +236,12 @@ impl Server {
         packets
     }
 
-    async fn parse_packet_udp(&mut self, client_idx: usize, udp_addr: SocketAddr, mut packet: RawPacket) -> anyhow::Result<()> {
+    async fn parse_packet_udp(
+        &mut self,
+        client_idx: usize,
+        udp_addr: SocketAddr,
+        mut packet: RawPacket,
+    ) -> anyhow::Result<()> {
         if packet.data.len() > 0 {
             let client = &mut self.clients[client_idx];
             let client_id = client.get_id();
@@ -236,7 +262,11 @@ impl Server {
                 let compressed = &packet.data[4..];
                 let mut decompressed: Vec<u8> = Vec::with_capacity(100_000);
                 let mut decompressor = flate2::Decompress::new(true);
-                decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::Finish)?;
+                decompressor.decompress_vec(
+                    compressed,
+                    &mut decompressed,
+                    flate2::FlushDecompress::Finish,
+                )?;
                 packet.header = decompressed.len() as u32;
                 packet.data = decompressed;
                 // let string_data = String::from_utf8_lossy(&packet.data[..]);
@@ -246,12 +276,14 @@ impl Server {
             // Check packet identifier
             let packet_identifier = packet.data[0] as char;
             if packet.data[0] >= 86 && packet.data[0] <= 89 {
-                self.broadcast_udp(Packet::Raw(packet), Some(client_id)).await;
+                self.broadcast_udp(Packet::Raw(packet), Some(client_id))
+                    .await;
             } else {
                 match packet_identifier {
                     'p' => {
-                        self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_code('p'))).await;
-                    },
+                        self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_code('p')))
+                            .await;
+                    }
                     'Z' => {
                         if packet.data.len() < 7 {
                             error!("Position packet too small!");
@@ -262,16 +294,24 @@ impl Server {
                             let car_id = packet.data[5] - 48;
 
                             let pos_json = &packet.data[7..];
-                            let pos_data: TransformPacket = serde_json::from_str(&String::from_utf8_lossy(pos_json))?;
+                            let pos_data: TransformPacket =
+                                serde_json::from_str(&String::from_utf8_lossy(pos_json))?;
 
                             let p = Packet::Raw(packet);
 
                             for i in 0..self.clients.len() {
                                 if self.clients[i].id == client_id {
                                     let client = &mut self.clients[i];
-                                    let car = client.get_car_mut(car_id).ok_or(ServerError::CarDoesntExist)?;
+                                    let car = client
+                                        .get_car_mut(car_id)
+                                        .ok_or(ServerError::CarDoesntExist)?;
                                     car.pos = pos_data.pos.into();
-                                    car.rot = Quat::from_xyzw(pos_data.rot[0], pos_data.rot[1], pos_data.rot[2], pos_data.rot[3]);
+                                    car.rot = Quat::from_xyzw(
+                                        pos_data.rot[0],
+                                        pos_data.rot[1],
+                                        pos_data.rot[2],
+                                        pos_data.rot[3],
+                                    );
                                     car.vel = pos_data.vel.into();
                                     car.rvel = pos_data.rvel.into();
                                 } else {
@@ -282,18 +322,25 @@ impl Server {
                                 }
                             }
                         }
-                    },
+                    }
                     _ => {
                         let string_data = String::from_utf8_lossy(&packet.data[..]);
-                        debug!("Unknown packet UDP - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
-                    },
+                        debug!(
+                            "Unknown packet UDP - String data: `{}`; Array: `{:?}`; Header: `{:?}`",
+                            string_data, packet.data, packet.header
+                        );
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    async fn parse_packet(&mut self, client_idx: usize, mut packet: RawPacket) -> anyhow::Result<()> {
+    async fn parse_packet(
+        &mut self,
+        client_idx: usize,
+        mut packet: RawPacket,
+    ) -> anyhow::Result<()> {
         if packet.data.len() > 0 {
             let client_id = {
                 let client = &mut self.clients[client_idx];
@@ -314,7 +361,11 @@ impl Server {
                 let compressed = &packet.data[4..];
                 let mut decompressed: Vec<u8> = Vec::with_capacity(100_000);
                 let mut decompressor = flate2::Decompress::new(true);
-                decompressor.decompress_vec(compressed, &mut decompressed, flate2::FlushDecompress::Finish)?;
+                decompressor.decompress_vec(
+                    compressed,
+                    &mut decompressed,
+                    flate2::FlushDecompress::Finish,
+                )?;
                 packet.header = decompressed.len() as u32;
                 packet.data = decompressed;
                 // let string_data = String::from_utf8_lossy(&packet.data[..]);
@@ -329,27 +380,50 @@ impl Server {
                 match packet_identifier {
                     'H' => {
                         // Full sync with server
-                        self.clients[client_idx].queue_packet(Packet::Raw(RawPacket::from_str(&format!("Sn{}", self.clients[client_idx].info.as_ref().unwrap().username.clone())))).await;
+                        self.clients[client_idx]
+                            .queue_packet(Packet::Raw(RawPacket::from_str(&format!(
+                                "Sn{}",
+                                self.clients[client_idx]
+                                    .info
+                                    .as_ref()
+                                    .unwrap()
+                                    .username
+                                    .clone()
+                            ))))
+                            .await;
                         // TODO: Sync all existing cars on server
                         //       Could be very annoying if you join an in-progress practice server
-                    },
+                    }
                     'O' => self.parse_vehicle_packet(client_idx, packet).await?,
                     'C' => {
                         // TODO: Chat filtering?
-                        self.broadcast(Packet::Notification(NotificationPacket::new(packet.data_as_string().clone())), None).await;
+                        self.broadcast(
+                            Packet::Notification(NotificationPacket::new(
+                                packet.data_as_string().clone(),
+                            )),
+                            None,
+                        )
+                        .await;
                         self.broadcast(Packet::Raw(packet), None).await;
-                    },
+                    }
                     _ => {
                         let string_data = String::from_utf8_lossy(&packet.data[..]);
-                        debug!("Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`", string_data, packet.data, packet.header);
-                    },
+                        debug!(
+                            "Unknown packet - String data: `{}`; Array: `{:?}`; Header: `{:?}`",
+                            string_data, packet.data, packet.header
+                        );
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    async fn parse_vehicle_packet(&mut self, client_idx: usize, packet: RawPacket) -> anyhow::Result<()> {
+    async fn parse_vehicle_packet(
+        &mut self,
+        client_idx: usize,
+        packet: RawPacket,
+    ) -> anyhow::Result<()> {
         if packet.data.len() < 6 {
             error!("Vehicle packet too small!");
             return Ok(()); // TODO: Return error here
@@ -359,18 +433,36 @@ impl Server {
             's' => {
                 let client = &mut self.clients[client_idx];
                 // trace!("Packet string: `{}`", packet.data_as_string());
-                let split_data = packet.data_as_string().splitn(3, ':').map(|s| s.to_string()).collect::<Vec<String>>();
+                let split_data = packet
+                    .data_as_string()
+                    .splitn(3, ':')
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>();
                 let car_json_str = &split_data.get(2).ok_or(std::fmt::Error)?;
                 // let car_json: serde_json::Value = serde_json::from_str(&car_json_str)?;
                 let car_id = client.register_car(Car::new(car_json_str.to_string()));
                 let client_id = client.get_id();
-                let packet_data = format!("Os:{}:{}:{}-{}:{}", client.get_roles(), client.get_name(), client_id, car_id, car_json_str);
+                let packet_data = format!(
+                    "Os:{}:{}:{}-{}:{}",
+                    client.get_roles(),
+                    client.get_name(),
+                    client_id,
+                    car_id,
+                    car_json_str
+                );
                 // trace!("Outbound string: `{}`", packet_data);
                 let response = RawPacket::from_str(&packet_data);
-                self.broadcast(Packet::Notification(NotificationPacket::new(format!("Client {} spawned a car (#{})!", client_id, car_id))), None).await;
+                self.broadcast(
+                    Packet::Notification(NotificationPacket::new(format!(
+                        "Client {} spawned a car (#{})!",
+                        client_id, car_id
+                    ))),
+                    None,
+                )
+                .await;
                 self.broadcast(Packet::Raw(response), None).await;
                 info!("Spawned car for client #{}!", client_id);
-            },
+            }
             'c' => {
                 // let split_data = packet.data_as_string().splitn(3, ':').map(|s| s.to_string()).collect::<Vec<String>>();
                 // let car_json_str = &split_data.get(2).ok_or(std::fmt::Error)?;
@@ -390,10 +482,14 @@ impl Server {
                         }
                     }
                 }
-            },
+            }
             'd' => {
                 debug!("packet: {:?}", packet);
-                let split_data = packet.data_as_string().splitn(3, [':', '-']).map(|s| s.to_string()).collect::<Vec<String>>();
+                let split_data = packet
+                    .data_as_string()
+                    .splitn(3, [':', '-'])
+                    .map(|s| s.to_string())
+                    .collect::<Vec<String>>();
                 let client_id = split_data[1].parse::<u8>()?;
                 let car_id = split_data[2].parse::<u8>()?;
                 for i in 0..self.clients.len() {
@@ -406,16 +502,18 @@ impl Server {
                     }
                 }
                 info!("Deleted car for client #{}!", client_id);
-            },
+            }
             'r' => {
-                self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
-            },
+                self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id))
+                    .await;
+            }
             't' => {
-                self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
-            },
+                self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id))
+                    .await;
+            }
             'm' => {
                 self.broadcast(Packet::Raw(packet), None).await;
-            },
+            }
             _ => error!("Unknown vehicle related packet!\n{:?}", packet), // TODO: Return error here
         }
         Ok(())
