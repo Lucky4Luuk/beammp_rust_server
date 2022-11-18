@@ -135,6 +135,11 @@ impl Server {
 
                 if self.clients[i].state == ClientState::Disconnect {
                     let id = self.clients[i].id;
+                    for j in 0..self.clients[i].cars.len() {
+                        let car_id = self.clients[i].cars[j].0;
+                        let delete_packet = format!("Od:{}-{}", id, car_id);
+                        self.broadcast(Packet::Raw(RawPacket::from_str(&delete_packet)), None).await;
+                    }
                     info!("Disconnecting client {}...", id);
                     self.clients.remove(i);
                     info!("Client {} disconnected!", id);
@@ -387,6 +392,7 @@ impl Server {
                 }
             },
             'd' => {
+                debug!("packet: {:?}", packet);
                 let split_data = packet.data_as_string().splitn(3, [':', '-']).map(|s| s.to_string()).collect::<Vec<String>>();
                 let client_id = split_data[1].parse::<u8>()?;
                 let car_id = split_data[2].parse::<u8>()?;
