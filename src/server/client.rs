@@ -25,6 +25,7 @@ pub enum ClientState {
     None,
     Connecting,
     SyncingResources,
+    Syncing,
     Disconnect,
 }
 

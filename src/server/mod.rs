@@ -290,8 +290,10 @@ impl Server {
 
     async fn parse_packet(&mut self, client_idx: usize, mut packet: RawPacket) -> anyhow::Result<()> {
         if packet.data.len() > 0 {
-            let client = &mut self.clients[client_idx];
-            let client_id = client.get_id();
+            let client_id = {
+                let client = &mut self.clients[client_idx];
+                client.get_id()
+            };
 
             // Check if compressed
             let mut is_compressed = false;
@@ -322,8 +324,9 @@ impl Server {
                 match packet_identifier {
                     'H' => {
                         // Full sync with server
-                        client.queue_packet(Packet::Raw(RawPacket::from_str(&format!("Sn{}", client.info.as_ref().unwrap().username.clone())))).await;
-                        // TODO: Send vehicle data
+                        self.clients[client_idx].queue_packet(Packet::Raw(RawPacket::from_str(&format!("Sn{}", self.clients[client_idx].info.as_ref().unwrap().username.clone())))).await;
+                        // TODO: Sync all existing cars on server
+                        //       Could be very annoying if you join an in-progress practice server
                     },
                     'O' => self.parse_vehicle_packet(client_idx, packet).await?,
                     'C' => {
@@ -366,7 +369,22 @@ impl Server {
             'c' => {
                 // let split_data = packet.data_as_string().splitn(3, ':').map(|s| s.to_string()).collect::<Vec<String>>();
                 // let car_json_str = &split_data.get(2).ok_or(std::fmt::Error)?;
-                debug!("Edit vehicle packet: {:?}", packet);
+                let client_id = packet.data[3] - 48;
+                let car_id = packet.data[5] - 48;
+                let car_json = String::from_utf8_lossy(&packet.data[7..]).to_string();
+                let response = Packet::Raw(packet.clone());
+                for i in 0..self.clients.len() {
+                    if self.clients[i].id == client_id {
+                        if let Some(car) = self.clients[i].get_car_mut(car_id) {
+                            car.car_json = car_json.clone();
+                        }
+                    } else {
+                        // Already looping so more efficient to send here
+                        if let Some(udp_addr) = self.clients[i].udp_addr {
+                            self.send_udp(udp_addr, &response).await;
+                        }
+                    }
+                }
             },
             'd' => {
                 let split_data = packet.data_as_string().splitn(3, [':', '-']).map(|s| s.to_string()).collect::<Vec<String>>();

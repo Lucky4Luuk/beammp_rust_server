@@ -61,6 +61,12 @@ Example:
 | ---- | --- | ----------- | ---- |
 | `Os` | C->S | Client informs server they are spawning a car | Os:C_ID:{car_json} |
 | `Os` | S->C | Server sends this packet to all clients, informing them a client has spawned a car | Os:C_ROLES:C_NAME:C_ID-CAR_ID:CAR_JSON |
+| `Or` | C->S | Client informs server they are respawning their car | Or:C_ID-CAR_ID:{respawn_json} |
+| `Or` | S->C | Server informs all other clients that a client is respawning their car | Or:C_ID-CAR_ID:{respawn_json} |
+| `Od` | C->S | Client informs server they are deleting their car | Od:C_ID-CAR_ID |
+| `Od` | S->C | Server informs all other clients that a client is deleting their car | Od:C_ID-CAR_ID |
+| `Oc` | C->S | Client informs server they are editing their car | Oc:?... |
+| `Oc` | S->C | Server informs all other clients that a client has edited their car | Oc:?... |
 
 ## UDP
 ### Packets

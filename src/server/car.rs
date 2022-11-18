@@ -1,8 +1,8 @@
 use glam::*;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Car {
-    car_json: String,
+    pub car_json: String,
 
     pub pos: Vec3,
     pub rot: Quat,

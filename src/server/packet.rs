@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 
 #[derive(Clone)]
 pub enum Packet {
@@ -99,4 +99,25 @@ impl std::fmt::Debug for RawPacket {
         write!(f, "Header: `{:?}` - Bytes: `{:?}` - String: `{}`", self.header, self.data, self.data_as_string())?;
         Ok(())
     }
+}
+
+#[derive(Default, Serialize)]
+pub struct RespawnPacketData {
+    pub pos: RespawnPacketDataPos,
+    pub rot: RespawnPacketDataRot,
+}
+
+#[derive(Default, Serialize)]
+pub struct RespawnPacketDataPos {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64
+}
+
+#[derive(Default, Serialize)]
+pub struct RespawnPacketDataRot {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub w: f64,
 }
