@@ -126,15 +126,11 @@ impl Server {
         let mut packets: Vec<(usize, RawPacket)> = Vec::new();
         for i in 0..self.clients.len() {
             if let Some(client) = self.clients.get_mut(i) {
-                if let Some(raw_packet) = client.process().await? {
-                    packets.push((i, raw_packet.clone()));
-                }
-
-                // More efficient than broadcasting as we are already looping
-                for name in joined_names.iter() {
-                    self.clients[i].queue_packet(
-                        Packet::Notification(NotificationPacket::new(format!("Welcome {}!", name.to_string())))
-                    ).await;
+                match client.process().await {
+                    Ok(packet_opt) => if let Some(raw_packet) = packet_opt {
+                        packets.push((i, raw_packet.clone()));
+                    },
+                    Err(e) => client.kick(&format!("Kicked: {:?}", e)).await,
                 }
 
                 if self.clients[i].state == ClientState::Disconnect {
@@ -142,6 +138,13 @@ impl Server {
                     info!("Disconnecting client {}...", id);
                     self.clients.remove(i);
                     info!("Client {} disconnected!", id);
+                }
+
+                // More efficient than broadcasting as we are already looping
+                for name in joined_names.iter() {
+                    self.clients[i].queue_packet(
+                        Packet::Notification(NotificationPacket::new(format!("Welcome {}!", name.to_string())))
+                    ).await;
                 }
             }
         }
@@ -249,8 +252,9 @@ impl Server {
                             error!("Position packet too small!");
                             return Err(ServerError::BrokenPacket.into());
                         } else {
-                            let client_id = packet.data[3];
-                            let car_id = packet.data[5];
+                            // Sent as text so removing 48 brings it from [48-57] to [0-9]
+                            let client_id = packet.data[3] - 48;
+                            let car_id = packet.data[5] - 48;
 
                             let pos_json = &packet.data[7..];
                             let pos_data: TransformPacket = serde_json::from_str(&String::from_utf8_lossy(pos_json))?;
@@ -357,6 +361,36 @@ impl Server {
                 let response = RawPacket::from_str(&packet_data);
                 self.broadcast(Packet::Notification(NotificationPacket::new(format!("Client {} spawned a car (#{})!", client_id, car_id))), None).await;
                 self.broadcast(Packet::Raw(response), None).await;
+                info!("Spawned car for client #{}!", client_id);
+            },
+            'c' => {
+                // let split_data = packet.data_as_string().splitn(3, ':').map(|s| s.to_string()).collect::<Vec<String>>();
+                // let car_json_str = &split_data.get(2).ok_or(std::fmt::Error)?;
+                debug!("Edit vehicle packet: {:?}", packet);
+            },
+            'd' => {
+                let split_data = packet.data_as_string().splitn(3, [':', '-']).map(|s| s.to_string()).collect::<Vec<String>>();
+                let client_id = split_data[1].parse::<u8>()?;
+                let car_id = split_data[2].parse::<u8>()?;
+                for i in 0..self.clients.len() {
+                    if self.clients[i].id == client_id {
+                        self.clients[i].unregister_car(car_id);
+                    }
+                    // Don't broadcast, we are already looping anyway
+                    if let Some(udp_addr) = self.clients[i].udp_addr {
+                        self.send_udp(udp_addr, &Packet::Raw(packet.clone())).await;
+                    }
+                }
+                info!("Deleted car for client #{}!", client_id);
+            },
+            'r' => {
+                self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
+            },
+            't' => {
+                self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
+            },
+            'm' => {
+                self.broadcast(Packet::Raw(packet), None).await;
             },
             _ => error!("Unknown vehicle related packet!\n{:?}", packet), // TODO: Return error here
         }

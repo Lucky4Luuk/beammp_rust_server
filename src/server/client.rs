@@ -188,7 +188,8 @@ impl Client {
         // let _ = self.socket.writable().await;
         // let _ = self.write_packet(Packet::Raw(RawPacket::from_str(&format!("K{}", msg)))).await;
         // self.disconnect();
-        self.queue_packet(Packet::Raw(RawPacket::from_str(&format!("K{}", msg)))).await;
+        let _ = self.write_packet(Packet::Raw(RawPacket::from_str(&format!("K{}", msg)))).await;
+        self.disconnect();
     }
 
     pub fn get_name(&self) -> &str {
@@ -210,6 +211,16 @@ impl Client {
         }
         self.cars.push((free_num, car));
         free_num
+    }
+
+    pub fn unregister_car(&mut self, car_id: u8) {
+        let prev_len = self.cars.len();
+        self.cars.retain(|(id, _)| {
+            id != &car_id
+        });
+        if prev_len == self.cars.len() {
+            error!("Failed to unregister car #{} for client #{}! Ignoring for now...", car_id, self.id);
+        }
     }
 
     pub fn get_car_mut(&mut self, mut car_id: u8) -> Option<&mut Car> {

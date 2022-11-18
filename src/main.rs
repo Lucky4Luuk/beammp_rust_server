@@ -41,7 +41,9 @@ async fn main_headless() {
 
     let mut server = server::Server::new(user_config_ref).await.map_err(|e| error!("{:?}", e)).expect("Failed to start server!");
     loop {
-        server.process().await.map_err(|e| error!("{:?}", e)).expect("Failed to process events!");
+        if let Err(e) = server.process().await {
+            error!("{:?}", e);
+        }
     }
 }
 
