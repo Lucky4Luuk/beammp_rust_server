@@ -13,7 +13,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
-use glam::*;
+use nalgebra::*;
 
 use serde::Deserialize;
 

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::task::JoinHandle;
 
-use glam::*;
+use nalgebra::*;
 
 mod backend;
 mod car;
@@ -177,6 +177,45 @@ impl Server {
         for (i, packet) in packets {
             self.parse_packet(i, packet).await?
         }
+
+        // Physics
+        if self.config.game.server_physics {
+
+        }
+
+        // Send position packets
+        self.udp_socket.writable().await;
+        for i in 0..self.clients.len() {
+            for k in 0..self.clients[i].cars.len() {
+                if self.clients[i].cars[k].1.needs_packet {
+                    self.clients[i].cars[k].1.needs_packet = false;
+                    let mut pos_data = TransformPacket {
+                        rvel: self.clients[i].cars[k].1.rvel.into(),
+                        tim: self.clients[i].cars[k].1.tim,
+                        pos: self.clients[i].cars[k].1.pos.into(),
+                        ping: self.clients[i].cars[k].1.ping,
+                        rot: self.clients[i].cars[k].1.rot.coords.into(),
+                        vel: self.clients[i].cars[k].1.vel.into(),
+                    };
+                    if self.clients[i].cars[k].1.is_corrected {
+                        pos_data.pos[1] += 80.0;
+                    }
+                    if let Ok(json) = serde_json::to_string(&pos_data) {
+                        let data = format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json);
+                        if self.clients[i].cars[k].1.is_corrected {
+                            debug!("Correcting!");
+                            self.clients[i].cars[k].1.is_corrected = false;
+                            if let Some(udp_addr) = self.clients[i].udp_addr {
+                                self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_str(&format!("Zp:{}:{}", self.clients[i].cars[k].0, json))));
+                            }
+                        }
+                        let p = Packet::Raw(RawPacket::from_str(&data));
+                        self.broadcast(p, Some(self.clients[i].id)).await;
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -306,19 +345,17 @@ impl Server {
                                         .get_car_mut(car_id)
                                         .ok_or(ServerError::CarDoesntExist)?;
                                     car.pos = pos_data.pos.into();
-                                    car.rot = Quat::from_xyzw(
+                                    car.rot = Quaternion::new(
+                                        pos_data.rot[3],
                                         pos_data.rot[0],
                                         pos_data.rot[1],
                                         pos_data.rot[2],
-                                        pos_data.rot[3],
                                     );
                                     car.vel = pos_data.vel.into();
                                     car.rvel = pos_data.rvel.into();
-                                } else {
-                                    let addr = self.clients[i].udp_addr;
-                                    if let Some(udp_addr) = addr {
-                                        self.send_udp(udp_addr, &p).await;
-                                    }
+                                    car.tim = pos_data.tim;
+                                    car.ping = pos_data.ping;
+                                    car.needs_packet = true;
                                 }
                             }
                         }

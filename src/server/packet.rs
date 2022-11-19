@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum Packet {
     Raw(RawPacket),
     Notification(NotificationPacket),
@@ -47,21 +47,13 @@ impl Packet {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct NotificationPacket(String);
 
 impl NotificationPacket {
     pub fn new<S: Into<String>>(msg: S) -> Self {
         Self(format!("J{}", msg.into()))
     }
-}
-
-#[derive(Clone, Deserialize)]
-pub struct TransformPacket {
-    pub pos: [f32; 3],
-    pub rot: [f32; 4],
-    pub vel: [f32; 3],
-    pub rvel: [f32; 3],
 }
 
 /// Protocol:
@@ -126,4 +118,14 @@ pub struct RespawnPacketDataRot {
     pub y: f64,
     pub z: f64,
     pub w: f64,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+pub struct TransformPacket {
+    pub rvel: [f64; 3],
+    pub tim: f64,
+    pub pos: [f64; 3],
+    pub ping: f64,
+    pub rot: [f64; 4],
+    pub vel: [f64; 3],
 }

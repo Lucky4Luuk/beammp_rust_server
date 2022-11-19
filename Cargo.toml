@@ -18,10 +18,11 @@ reqwest = { version = "0.11", features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "*"
 
-glam = "0.22.0"
+toml = "0.5"
 flate2 = "1.0"
 
-toml = "0.5"
+nalgebra = "0.31.4"
+rapier3d = "0.16.1"
 
 # UI
 crossterm = "0.25"

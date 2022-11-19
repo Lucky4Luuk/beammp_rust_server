@@ -3,3 +3,4 @@ port = 48900
 
 [game]
 map = "levels/west_coast_usa/info.json"
+server_physics = true

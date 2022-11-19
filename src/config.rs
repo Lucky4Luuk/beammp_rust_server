@@ -14,4 +14,5 @@ pub struct NetworkSettings {
 #[derive(Deserialize)]
 pub struct GameSettings {
     pub map: String,
+    pub server_physics: bool,
 }
