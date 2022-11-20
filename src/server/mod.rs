@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}};
+use std::time::Instant;
 
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::task::JoinHandle;
@@ -10,13 +11,28 @@ mod backend;
 mod car;
 mod client;
 mod packet;
+mod track_limits;
+mod spawns;
 
 pub use backend::*;
 pub use car::*;
 pub use client::*;
 pub use packet::*;
+pub use track_limits::*;
+pub use spawns::*;
 
 pub use crate::config::Config;
+
+#[derive(PartialEq)]
+enum ServerState {
+    WaitingForClients,
+    WaitingForSpawns,
+    Qualifying,
+    LiningUp,
+    Countdown,
+    Race,
+    Finish,
+}
 
 pub struct Server {
     tcp_listener: Arc<TcpListener>,
@@ -28,6 +44,18 @@ pub struct Server {
     connect_runtime_handle: JoinHandle<()>,
 
     config: Arc<Config>,
+
+    track_limits: Option<TrackLimits>,
+    track_limits_pit: Option<TrackLimits>,
+    track_limits_pit_exit: Option<TrackLimits>,
+    track_limits_client: u8, // The client to check this loop, also serves as a timer for checking
+
+    track_spawns_pit: Option<Spawns>,
+
+    server_state: ServerState,
+    server_state_start: Instant,
+
+    allowed_spawns: bool,
 }
 
 impl Server {
@@ -76,6 +104,30 @@ impl Server {
         });
         debug!("Client acception runtime started!");
 
+        let track_limits = if let Some(limits_file) = &config.game.map_limits {
+            Some(serde_json::from_str(&std::fs::read_to_string(limits_file)?)?)
+        } else {
+            None
+        };
+
+        let track_limits_pit = if let Some(limits_file) = &config.game.map_limits_pit {
+            Some(serde_json::from_str(&std::fs::read_to_string(limits_file)?)?)
+        } else {
+            None
+        };
+
+        let track_limits_pit_exit = if let Some(limits_file) = &config.game.map_limits_pit_exit {
+            Some(serde_json::from_str(&std::fs::read_to_string(limits_file)?)?)
+        } else {
+            None
+        };
+
+        let track_spawns_pit = if let Some(spawns_file) = &config.game.map_spawns_pit {
+            Some(serde_json::from_str(&std::fs::read_to_string(spawns_file)?)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             tcp_listener: tcp_listener,
             udp_socket: udp_socket,
@@ -86,6 +138,18 @@ impl Server {
             connect_runtime_handle: connect_runtime_handle,
 
             config: config,
+
+            track_limits: track_limits,
+            track_limits_pit: track_limits_pit,
+            track_limits_pit_exit: track_limits_pit_exit,
+            track_limits_client: 0,
+
+            track_spawns_pit: track_spawns_pit,
+
+            server_state: ServerState::WaitingForClients,
+            server_state_start: Instant::now(),
+
+            allowed_spawns: false,
         })
     }
 
@@ -114,8 +178,6 @@ impl Server {
                 trace!("Accepted incoming clients!");
             }
         }
-
-        // self.broadcast(Packet::Notification(String::from("test"))).await;
 
         // Process UDP packets
         // TODO: Use a UDP addr -> client ID look up table
@@ -150,19 +212,6 @@ impl Server {
                     Err(e) => client.kick(&format!("Kicked: {:?}", e)).await,
                 }
 
-                if self.clients[i].state == ClientState::Disconnect {
-                    let id = self.clients[i].id;
-                    for j in 0..self.clients[i].cars.len() {
-                        let car_id = self.clients[i].cars[j].0;
-                        let delete_packet = format!("Od:{}-{}", id, car_id);
-                        self.broadcast(Packet::Raw(RawPacket::from_str(&delete_packet)), None)
-                            .await;
-                    }
-                    info!("Disconnecting client {}...", id);
-                    self.clients.remove(i);
-                    info!("Client {} disconnected!", id);
-                }
-
                 // More efficient than broadcasting as we are already looping
                 for name in joined_names.iter() {
                     self.clients[i]
@@ -178,18 +227,62 @@ impl Server {
             self.parse_packet(i, packet).await?
         }
 
+        // I'm sorry for this code :(
+        for i in 0..self.clients.len() {
+            if self.clients.get(i).ok_or(ServerError::ClientDoesntExist)?.state == ClientState::Disconnect {
+                let id = self.clients.get(i).ok_or(ServerError::ClientDoesntExist)?.id;
+                for j in 0..self.clients.get(i).ok_or(ServerError::ClientDoesntExist)?.cars.len() {
+                    let car_id = self.clients.get(i).ok_or(ServerError::ClientDoesntExist)?.cars[j].0;
+                    let delete_packet = format!("Od:{}-{}", id, car_id);
+                    self.broadcast(Packet::Raw(RawPacket::from_str(&delete_packet)), None)
+                        .await;
+                }
+                info!("Disconnecting client {}...", id);
+                self.clients.remove(i);
+                info!("Client {} disconnected!", id);
+            }
+        }
+
         // Physics
         if self.config.game.server_physics {
+            todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
+        }
 
+        // Track limits
+        if self.server_state == ServerState::Qualifying || self.server_state == ServerState::Race {
+            if let Some(client) = &mut self.clients.get_mut(self.track_limits_client as usize) {
+                for (_, car) in &mut client.cars {
+                    if let Some(limits) = &self.track_limits {
+                        if limits.check_limits([car.pos.x as f32, car.pos.y as f32], [1.0, 1.0]) {
+                            if let Some(start) = car.offtrack_start {
+                                println!("Client went {} seconds offtrack!", start.elapsed().as_secs_f32());
+                            }
+                            car.offtrack_start = None;
+                        } else {
+                            if car.offtrack_start.is_none() {
+                                car.offtrack_start = Some(Instant::now());
+                            }
+                        }
+                    }
+
+                    if let Some(limits) = &self.track_limits_pit {
+                        limits.check_limits([car.pos.x as f32, car.pos.y as f32], [1.0, 1.0]);
+                    }
+
+                    // if let Some(limits) = &self.track_limits_pit_exit {
+                    //     limits.check_limits([car.pos.x as f32, car.pos.y as f32], [1.0, 1.0]);
+                    // }
+                }
+            }
         }
 
         // Send position packets
-        self.udp_socket.writable().await;
+        let _ = self.udp_socket.writable().await;
         for i in 0..self.clients.len() {
             for k in 0..self.clients[i].cars.len() {
                 if self.clients[i].cars[k].1.needs_packet {
                     self.clients[i].cars[k].1.needs_packet = false;
-                    let mut pos_data = TransformPacket {
+                    let pos_data = TransformPacket {
                         rvel: self.clients[i].cars[k].1.rvel.into(),
                         tim: self.clients[i].cars[k].1.tim,
                         pos: self.clients[i].cars[k].1.pos.into(),
@@ -197,16 +290,14 @@ impl Server {
                         rot: self.clients[i].cars[k].1.rot.coords.into(),
                         vel: self.clients[i].cars[k].1.vel.into(),
                     };
-                    if self.clients[i].cars[k].1.is_corrected {
-                        pos_data.pos[1] += 80.0;
-                    }
                     if let Ok(json) = serde_json::to_string(&pos_data) {
                         let data = format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json);
                         if self.clients[i].cars[k].1.is_corrected {
-                            debug!("Correcting!");
+                            todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
                             self.clients[i].cars[k].1.is_corrected = false;
                             if let Some(udp_addr) = self.clients[i].udp_addr {
-                                self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_str(&format!("Zp:{}:{}", self.clients[i].cars[k].0, json))));
+                                // This breaks all force feedback for a car
+                                self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_str(&format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json)))).await;
                             }
                         }
                         let p = Packet::Raw(RawPacket::from_str(&data));
@@ -214,6 +305,96 @@ impl Server {
                     }
                 }
             }
+        }
+
+        let _ = self.track_limits_client.wrapping_add(1);
+
+        // Handle server states
+        let elapsed = self.server_state_start.elapsed();
+        match self.server_state {
+            ServerState::WaitingForClients => {
+                if self.config.event.expected_clients.is_some() && elapsed.as_secs() < 150 {
+                    let required_clients = self.config.event.expected_clients.as_ref().unwrap();
+                    let mut joined_clients = required_clients.clone();
+                    joined_clients.retain(|name| {
+                        for client in &self.clients {
+                            if client.info.as_ref().unwrap().username.trim() == name.trim() {
+                                return false;
+                            }
+                        }
+                        true
+                    });
+                    let mut kick = Vec::new();
+                    for (i, client) in self.clients.iter().enumerate() {
+                        let mut allowed = false;
+                        'search: for name in required_clients {
+                            if client.info.as_ref().unwrap().username.trim() == name.trim() {
+                                allowed = true;
+                                break 'search;
+                            }
+                        }
+                        if !allowed {
+                            kick.push(i);
+                            debug!("Kicking client! They are not allowed into the server.");
+                        }
+                    }
+                    for i in kick {
+                        self.clients[i].kick("Not whitelisted for this server!").await;
+                    }
+                    if joined_clients.len() == 0 {
+                        // All expected clients are in the server
+                        info!("All clients connected!");
+                        self.server_state = ServerState::WaitingForSpawns;
+                        self.allowed_spawns = true;
+                    }
+                } else {
+                    self.connect_runtime_handle.abort();
+                    info!("Clients no longer allowed to join!");
+                    self.server_state = ServerState::WaitingForSpawns;
+                    self.allowed_spawns = true;
+                }
+            }
+            ServerState::WaitingForSpawns => {
+                let mut has_spawned = 0;
+                for client in &self.clients {
+                    if client.cars.len() > 0 {
+                        has_spawned += 1;
+                    }
+                }
+                if has_spawned == self.clients.len() {
+                    info!("All clients have spawned a car!");
+                    self.server_state = ServerState::Qualifying;
+                    let mut i = 0;
+                    for client in &self.clients {
+                        for (id, car) in &client.cars {
+                            let spawn = self.track_spawns_pit.as_ref().expect("Map did not have pit lane spawns set up!").get_client_spawn(i);
+                            if let Ok(json) = serde_json::to_string(&RespawnPacketData {
+                                pos: RespawnPacketDataPos {
+                                    x: spawn.pos[0],
+                                    y: spawn.pos[1],
+                                    z: spawn.pos[2],
+                                },
+                                rot: RespawnPacketDataRot {
+                                    x: spawn.rot[0],
+                                    y: spawn.rot[1],
+                                    z: spawn.rot[2],
+                                    w: spawn.rot[3]
+                                },
+                            }) {
+                                let packet_data = format!("Or:{}-{}:{}", client.id, id, json);
+                                self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
+                            }
+                            i += 1;
+                        }
+                    }
+                }
+            }
+            ServerState::Qualifying => {
+                if self.track_limits_client == 0 {
+                    // trace!("client0 car0: {:?} / {:?}", self.clients[0].cars[0].1.pos, self.clients[0].cars[0].1.rot);
+                }
+            }
+            _ => todo!()
         }
 
         Ok(())
@@ -479,26 +660,51 @@ impl Server {
                 // let car_json: serde_json::Value = serde_json::from_str(&car_json_str)?;
                 let car_id = client.register_car(Car::new(car_json_str.to_string()));
                 let client_id = client.get_id();
-                let packet_data = format!(
-                    "Os:{}:{}:{}-{}:{}",
-                    client.get_roles(),
-                    client.get_name(),
-                    client_id,
-                    car_id,
-                    car_json_str
-                );
-                // trace!("Outbound string: `{}`", packet_data);
-                let response = RawPacket::from_str(&packet_data);
-                self.broadcast(
-                    Packet::Notification(NotificationPacket::new(format!(
-                        "Client {} spawned a car (#{})!",
-                        client_id, car_id
-                    ))),
-                    None,
-                )
-                .await;
-                self.broadcast(Packet::Raw(response), None).await;
-                info!("Spawned car for client #{}!", client_id);
+                let mut allowed = self.allowed_spawns;
+                if let Some(max_cars) = self.config.game.max_cars {
+                    allowed = allowed && (client.cars.len() >= max_cars as usize)
+                }
+                if allowed {
+                    let packet_data = format!(
+                        "Os:{}:{}:{}-{}:{}",
+                        client.get_roles(),
+                        client.get_name(),
+                        client_id,
+                        car_id,
+                        car_json_str
+                    );
+                    let response = RawPacket::from_str(&packet_data);
+                    self.broadcast(
+                        Packet::Notification(NotificationPacket::new(format!(
+                            "Client {} spawned a car (#{})!",
+                            client_id, car_id
+                        ))),
+                        None,
+                    )
+                    .await;
+                    self.broadcast(Packet::Raw(response), None).await;
+                    info!("Spawned car for client #{}!", client_id);
+                } else {
+                    let packet_data = format!(
+                        "Os:{}:{}:{}-{}:{}",
+                        client.get_roles(),
+                        client.get_name(),
+                        client_id,
+                        car_id,
+                        car_json_str
+                    );
+                    let response = RawPacket::from_str(&packet_data);
+                    client.write_packet(Packet::Raw(response)).await;
+                    let packet_data = format!(
+                        "Od:{}-{}",
+                        client_id,
+                        car_id,
+                    );
+                    let response = RawPacket::from_str(&packet_data);
+                    client.write_packet(Packet::Raw(response)).await;
+                    client.unregister_car(car_id);
+                    info!("Blocked spawn for client #{}!", client_id);
+                }
             }
             'c' => {
                 // let split_data = packet.data_as_string().splitn(3, ':').map(|s| s.to_string()).collect::<Vec<String>>();
@@ -541,6 +747,7 @@ impl Server {
                 info!("Deleted car for client #{}!", client_id);
             }
             'r' => {
+                debug!("Or: {:?}", packet);
                 self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id))
                     .await;
             }
@@ -568,6 +775,7 @@ impl Drop for Server {
 pub enum ServerError {
     BrokenPacket,
     CarDoesntExist,
+    ClientDoesntExist,
 }
 
 impl std::fmt::Display for ServerError {

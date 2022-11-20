@@ -40,10 +40,10 @@ async fn main_headless() {
     let user_config: config::Config = toml::from_str(
         &std::fs::read_to_string("config.toml")
             .map_err(|_| error!("Failed to read config file!"))
-            .expect("Failed to read config file!"),
-    )
-    .map_err(|_| error!("Failed to parse config file!"))
-    .expect("Failed to parse config file!");
+            .expect("Failed to read config file!")
+        )
+        .map_err(|_| error!("Failed to parse config file!"))
+        .expect("Failed to parse config file!");
     let user_config = Arc::new(user_config);
     let user_config_ref = Arc::clone(&user_config);
 

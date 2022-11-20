@@ -3,4 +3,12 @@ port = 48900
 
 [game]
 map = "levels/west_coast_usa/info.json"
-server_physics = true
+map_limits = "west_coast_usa_track.json"
+map_limits_pit = "west_coast_usa_pit.json"
+map_limits_pit_exit = "west_coast_usa_pit_exit.json"
+map_spawns_pit = "west_coast_usa_spawns_pit.json"
+server_physics = false # Broken
+max_cars = 1
+
+[event]
+expected_clients = ["luuk-bepis"] # , "Firerock"

@@ -1,6 +1,8 @@
 use nalgebra::*;
 
-#[derive(Default, Clone)]
+use std::time::Instant;
+
+#[derive(Default, Clone, Debug)]
 pub struct Car {
     pub car_json: String,
 
@@ -13,13 +15,19 @@ pub struct Car {
 
     pub needs_packet: bool,
     pub is_corrected: bool,
+
+    pub offtrack_start: Option<Instant>,
+    pub in_pits: bool,
 }
 
 impl Car {
     pub fn new(car_json: String) -> Self {
         Self {
             car_json: car_json,
-            is_corrected: true,
+            is_corrected: false,
+
+            offtrack_start: None,
+            in_pits: false,
 
             ..Default::default()
         }

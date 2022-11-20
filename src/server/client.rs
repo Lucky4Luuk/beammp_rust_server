@@ -326,7 +326,7 @@ impl Client {
     }
 
     /// Blocking write
-    async fn write_packet(&mut self, packet: Packet) -> anyhow::Result<()> {
+    pub async fn write_packet(&mut self, packet: Packet) -> anyhow::Result<()> {
         let mut lock = self.write_half.lock().await;
         lock.writable().await?;
         trace!("Sending packet!");
