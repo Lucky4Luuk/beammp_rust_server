@@ -13,6 +13,7 @@ mod client;
 mod packet;
 mod track_limits;
 mod spawns;
+mod track_path;
 
 pub use backend::*;
 pub use car::*;
@@ -20,6 +21,7 @@ pub use client::*;
 pub use packet::*;
 pub use track_limits::*;
 pub use spawns::*;
+pub use track_path::*;
 
 pub use crate::config::Config;
 
@@ -51,6 +53,7 @@ pub struct Server {
     track_limits_client: u8, // The client to check this loop, also serves as a timer for checking
 
     track_spawns_pit: Option<Spawns>,
+    track_path: Option<TrackPath>,
 
     server_state: ServerState,
     server_state_start: Instant,
@@ -128,6 +131,12 @@ impl Server {
             None
         };
 
+        let track_path = if let Some(path_file) = &config.game.map_path {
+            Some(serde_json::from_str(&std::fs::read_to_string(path_file)?)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             tcp_listener: tcp_listener,
             udp_socket: udp_socket,
@@ -145,6 +154,7 @@ impl Server {
             track_limits_client: 0,
 
             track_spawns_pit: track_spawns_pit,
+            track_path: track_path,
 
             server_state: ServerState::WaitingForClients,
             server_state_start: Instant::now(),
@@ -248,8 +258,8 @@ impl Server {
             todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
         }
 
-        // Track limits
         if self.server_state == ServerState::Qualifying || self.server_state == ServerState::Race {
+            // Track limits
             if let Some(client) = &mut self.clients.get_mut(self.track_limits_client as usize) {
                 for (_, car) in &mut client.cars {
                     if let Some(limits) = &self.track_limits {
@@ -274,6 +284,20 @@ impl Server {
                     // }
                 }
             }
+
+            // Track path
+            if let Some(client) = &mut self.clients.get_mut(self.track_limits_client as usize) {
+                for (_, car) in &mut client.cars {
+                    if let Some(path) = &self.track_path {
+                        let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
+                        let car_angle = unit_quat.euler_angles().2 / std::f64::consts::PI * 180.0;
+                        let track_angle = -path.get_angle_at_pos([car.pos.x as f32, car.pos.y as f32]) + 90.0;
+                        // debug!("angle diff: {}", (car_angle as f32 - track_angle).abs() % 360.0);
+                        let progress = path.get_percentage_along_track([car.pos.x as f32, car.pos.y as f32]);
+                        debug!("progress: {}", progress);
+                    }
+                }
+            }
         }
 
         // Send position packets
@@ -296,7 +320,7 @@ impl Server {
                             todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
                             self.clients[i].cars[k].1.is_corrected = false;
                             if let Some(udp_addr) = self.clients[i].udp_addr {
-                                // This breaks all force feedback for a car
+                                // TODO: This breaks all force feedback for a car
                                 self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_str(&format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json)))).await;
                             }
                         }
@@ -390,9 +414,7 @@ impl Server {
                 }
             }
             ServerState::Qualifying => {
-                if self.track_limits_client == 0 {
-                    // trace!("client0 car0: {:?} / {:?}", self.clients[0].cars[0].1.pos, self.clients[0].cars[0].1.rot);
-                }
+
             }
             _ => todo!()
         }

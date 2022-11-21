@@ -19,6 +19,7 @@ pub struct GameSettings {
     pub map_limits_pit: Option<String>,
     pub map_limits_pit_exit: Option<String>,
     pub map_spawns_pit: Option<String>,
+    pub map_path: Option<String>,
     pub server_physics: bool,
     pub max_cars: Option<u8>,
 }

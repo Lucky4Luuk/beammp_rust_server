@@ -7,6 +7,7 @@ map_limits = "west_coast_usa_track.json"
 map_limits_pit = "west_coast_usa_pit.json"
 map_limits_pit_exit = "west_coast_usa_pit_exit.json"
 map_spawns_pit = "west_coast_usa_spawns_pit.json"
+map_path = "west_coast_usa_path.json"
 server_physics = false # Broken
 max_cars = 1
 
