@@ -18,6 +18,13 @@ pub struct Car {
 
     pub offtrack_start: Option<Instant>,
     pub in_pits: bool,
+    pub intersects_finish: bool,
+
+    pub hitbox_half: [f32; 2],
+
+    pub latest_angle_to_track: f32,
+    pub latest_vel_angle_to_track: f32,
+    pub laps: usize,
 }
 
 impl Car {
@@ -28,6 +35,13 @@ impl Car {
 
             offtrack_start: None,
             in_pits: false,
+            intersects_finish: false,
+
+            hitbox_half: [1.0, 1.0],
+
+            latest_angle_to_track: 0.0,
+            latest_vel_angle_to_track: 0.0,
+            laps: 0,
 
             ..Default::default()
         }

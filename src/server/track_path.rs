@@ -3,6 +3,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct TrackPath {
     nodes: Vec<Node>,
+    total_dist: f32,
 }
 
 #[derive(Deserialize)]
@@ -54,12 +55,15 @@ impl TrackPath {
         let mut closest_dist = (pos[0] - self.nodes[0].p[0]).powf(2.0) + (pos[1] - self.nodes[0].p[1]).powf(2.0);
         for i in 1..self.nodes.len() {
             let dist = (pos[0] - self.nodes[i].p[0]).powf(2.0) + (pos[1] - self.nodes[i].p[1]).powf(2.0);
-            if dist < closest_dist {
+            let car_node_angle = (self.nodes[i].p[1] - pos[1]).atan2(self.nodes[i].p[0] - pos[0]);
+            let node_next_angle = (self.nodes[(i+1)%(self.nodes.len()-1)].p[1] - self.nodes[i].p[1]).atan2(self.nodes[(i+1)%(self.nodes.len()-1)].p[0] - self.nodes[i].p[0]);
+            let car_ahead = ((car_node_angle - node_next_angle).abs() % 360.0) < 90.0;
+            if dist < closest_dist && car_ahead {
                 closest_dist = dist;
                 closest = i;
             }
         }
-        self.nodes[closest].t
+        self.nodes[closest].t - closest_dist / self.total_dist
     }
 }
 

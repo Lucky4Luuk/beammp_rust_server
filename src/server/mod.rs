@@ -54,6 +54,7 @@ pub struct Server {
 
     track_spawns_pit: Option<Spawns>,
     track_path: Option<TrackPath>,
+    track_finish: Option<TrackLimits>,
 
     server_state: ServerState,
     server_state_start: Instant,
@@ -137,6 +138,12 @@ impl Server {
             None
         };
 
+        let track_finish = if let Some(finish_file) = &config.game.map_finish {
+            Some(serde_json::from_str(&std::fs::read_to_string(finish_file)?)?)
+        } else {
+            None
+        };
+
         Ok(Self {
             tcp_listener: tcp_listener,
             udp_socket: udp_socket,
@@ -155,6 +162,7 @@ impl Server {
 
             track_spawns_pit: track_spawns_pit,
             track_path: track_path,
+            track_finish: track_finish,
 
             server_state: ServerState::WaitingForClients,
             server_state_start: Instant::now(),
@@ -263,7 +271,7 @@ impl Server {
             if let Some(client) = &mut self.clients.get_mut(self.track_limits_client as usize) {
                 for (_, car) in &mut client.cars {
                     if let Some(limits) = &self.track_limits {
-                        if limits.check_limits([car.pos.x as f32, car.pos.y as f32], [1.0, 1.0]) {
+                        if limits.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
                             if let Some(start) = car.offtrack_start {
                                 println!("Client went {} seconds offtrack!", start.elapsed().as_secs_f32());
                             }
@@ -276,7 +284,7 @@ impl Server {
                     }
 
                     if let Some(limits) = &self.track_limits_pit {
-                        limits.check_limits([car.pos.x as f32, car.pos.y as f32], [1.0, 1.0]);
+                        limits.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half);
                     }
 
                     // if let Some(limits) = &self.track_limits_pit_exit {
@@ -291,10 +299,37 @@ impl Server {
                     if let Some(path) = &self.track_path {
                         let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
                         let car_angle = unit_quat.euler_angles().2 / std::f64::consts::PI * 180.0;
+                        let car_forward = car.vel;
+                        let car_vel_angle = -(car_forward.y.atan2(car_forward.x) as f32 / std::f32::consts::PI * 180.0) + 90.0;
                         let track_angle = -path.get_angle_at_pos([car.pos.x as f32, car.pos.y as f32]) + 90.0;
-                        // debug!("angle diff: {}", (car_angle as f32 - track_angle).abs() % 360.0);
+                        let angle_diff = (car_angle as f32 - track_angle).abs() % 360.0;
+                        car.latest_angle_to_track = angle_diff;
+                        let angle_vel_diff = (180.0 - ((car_vel_angle as f32 - track_angle).abs() % 360.0)).max(0.0);
+                        car.latest_vel_angle_to_track = angle_vel_diff;
+                        // debug!("angle vel diff: {}", angle_vel_diff);
                         let progress = path.get_percentage_along_track([car.pos.x as f32, car.pos.y as f32]);
-                        debug!("progress: {}", progress);
+                        // debug!("progress: {}", progress);
+                    }
+                }
+            }
+
+            // Finish line
+            for client in &mut self.clients {
+                for (_, car) in &mut client.cars {
+                    if let Some(finish) = &self.track_finish {
+                        if finish.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
+                            if !car.intersects_finish {
+                                if car.latest_vel_angle_to_track > 135.0 {
+                                    car.laps -= 1;
+                                } else {
+                                    car.laps += 1;
+                                }
+                                debug!("laps: {}", car.laps);
+                            }
+                            car.intersects_finish = true;
+                        } else {
+                            car.intersects_finish = false;
+                        }
                     }
                 }
             }
