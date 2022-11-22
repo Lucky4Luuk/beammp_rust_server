@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use argh::FromArgs;
 
+pub mod util;
 mod config;
 mod server;
 mod ui;

@@ -1,12 +1,6 @@
 use serde::Deserialize;
 
-fn lerp<const N: usize>(a: &[f64; N], b: &[f64; N], t: f64) -> [f64; N] {
-    let mut out = [0f64; N];
-    for i in 0..N {
-        out[i] = a[i] + (b[i] - a[i]) * t;
-    }
-    out
-}
+use crate::util::*;
 
 #[derive(Deserialize)]
 pub struct Spawns {

@@ -1,6 +1,6 @@
 use nalgebra::*;
 
-use std::time::Instant;
+use std::time::{Instant, Duration};
 
 #[derive(Default, Clone, Debug)]
 pub struct Car {
@@ -18,13 +18,18 @@ pub struct Car {
 
     pub offtrack_start: Option<Instant>,
     pub in_pits: bool,
-    pub intersects_finish: bool,
+    pub intersects_cp: bool,
 
     pub hitbox_half: [f32; 2],
 
     pub latest_angle_to_track: f32,
     pub latest_vel_angle_to_track: f32,
+
     pub laps: usize,
+    pub lap_start: Option<Instant>,
+    pub lap_times: Vec<Duration>,
+
+    pub next_checkpoint: usize,
 }
 
 impl Car {
@@ -35,15 +40,25 @@ impl Car {
 
             offtrack_start: None,
             in_pits: false,
-            intersects_finish: false,
+            intersects_cp: false,
 
             hitbox_half: [1.0, 1.0],
 
             latest_angle_to_track: 0.0,
             latest_vel_angle_to_track: 0.0,
+
             laps: 0,
+            lap_start: None,
+            lap_times: Vec::new(),
+
+            next_checkpoint: 0,
 
             ..Default::default()
         }
+    }
+
+    pub fn add_lap_time(&mut self, duration: Duration) {
+        debug!("lap time: {}:{}.{}", (duration.as_secs_f32() / 60.0).floor(), duration.as_secs_f32() % 60.0, duration.subsec_millis());
+        self.lap_times.push(duration);
     }
 }

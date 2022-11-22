@@ -53,8 +53,7 @@ pub struct Server {
     track_limits_client: u8, // The client to check this loop, also serves as a timer for checking
 
     track_spawns_pit: Option<Spawns>,
-    track_path: Option<TrackPath>,
-    track_finish: Option<TrackLimits>,
+    track_checkpoints: Vec<TrackPath>,
 
     server_state: ServerState,
     server_state_start: Instant,
@@ -132,16 +131,15 @@ impl Server {
             None
         };
 
-        let track_path = if let Some(path_file) = &config.game.map_path {
-            Some(serde_json::from_str(&std::fs::read_to_string(path_file)?)?)
+        let track_checkpoints = if let Some(cp_list) = &config.game.map_checkpoints {
+            // Some(cp_list.iter().map(|file| serde_json::from_str(&std::fs::read_to_string(path_file)?)?).collect())
+            let mut list = Vec::new();
+            for file in cp_list {
+                list.push(serde_json::from_str(&std::fs::read_to_string(file)?)?);
+            }
+            list
         } else {
-            None
-        };
-
-        let track_finish = if let Some(finish_file) = &config.game.map_finish {
-            Some(serde_json::from_str(&std::fs::read_to_string(finish_file)?)?)
-        } else {
-            None
+            Vec::new()
         };
 
         Ok(Self {
@@ -161,8 +159,7 @@ impl Server {
             track_limits_client: 0,
 
             track_spawns_pit: track_spawns_pit,
-            track_path: track_path,
-            track_finish: track_finish,
+            track_checkpoints: track_checkpoints,
 
             server_state: ServerState::WaitingForClients,
             server_state_start: Instant::now(),
@@ -296,39 +293,61 @@ impl Server {
             // Track path
             if let Some(client) = &mut self.clients.get_mut(self.track_limits_client as usize) {
                 for (_, car) in &mut client.cars {
-                    if let Some(path) = &self.track_path {
+                    let active_cp = if car.next_checkpoint == 0 {
+                        self.track_checkpoints.len() - 1
+                    } else {
+                        car.next_checkpoint - 1
+                    };
+                    if let Some(path) = &self.track_checkpoints.get(active_cp) {
                         let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
                         let car_angle = unit_quat.euler_angles().2 / std::f64::consts::PI * 180.0;
-                        let car_forward = car.vel;
+                        let car_forward = car.vel.xy().normalize();
                         let car_vel_angle = -(car_forward.y.atan2(car_forward.x) as f32 / std::f32::consts::PI * 180.0) + 90.0;
                         let track_angle = -path.get_angle_at_pos([car.pos.x as f32, car.pos.y as f32]) + 90.0;
                         let angle_diff = (car_angle as f32 - track_angle).abs() % 360.0;
                         car.latest_angle_to_track = angle_diff;
                         let angle_vel_diff = (180.0 - ((car_vel_angle as f32 - track_angle).abs() % 360.0)).max(0.0);
                         car.latest_vel_angle_to_track = angle_vel_diff;
+                        // debug!("angle diff: {}", angle_diff);
                         // debug!("angle vel diff: {}", angle_vel_diff);
                         let progress = path.get_percentage_along_track([car.pos.x as f32, car.pos.y as f32]);
-                        // debug!("progress: {}", progress);
+                        debug!("progress: {}", progress);
                     }
                 }
             }
 
-            // Finish line
+            // Checkpoints
             for client in &mut self.clients {
                 for (_, car) in &mut client.cars {
-                    if let Some(finish) = &self.track_finish {
-                        if finish.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
-                            if !car.intersects_finish {
-                                if car.latest_vel_angle_to_track > 135.0 {
-                                    car.laps -= 1;
+                    if let Some(cp) = self.track_checkpoints.get(car.next_checkpoint) {
+                        if cp.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
+                            if !car.intersects_cp {
+                                if car.next_checkpoint == 0 {
+                                    // Start/finish checkpoint
+                                    if car.latest_vel_angle_to_track > 135.0 {
+                                        car.laps -= 1;
+                                        car.lap_start = None;
+                                    } else {
+                                        if let Some(last) = car.lap_start {
+                                            car.add_lap_time(last.elapsed());
+                                        }
+                                        car.laps += 1;
+                                        car.lap_start = Some(Instant::now());
+                                        car.next_checkpoint = 1;
+                                    }
                                 } else {
-                                    car.laps += 1;
+                                    // Not the last checkpoint
+                                    car.next_checkpoint += 1;
+                                    if car.next_checkpoint == self.track_checkpoints.len() {
+                                        car.next_checkpoint = 0;
+                                    }
                                 }
-                                debug!("laps: {}", car.laps);
                             }
-                            car.intersects_finish = true;
+                            // debug!("checkpoint: {}", car.next_checkpoint);
+                            // debug!("lap: {}", car.laps);
+                            car.intersects_cp = true;
                         } else {
-                            car.intersects_finish = false;
+                            car.intersects_cp = false;
                         }
                     }
                 }

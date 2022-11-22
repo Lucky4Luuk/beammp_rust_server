@@ -4,8 +4,8 @@ use parry2d::query::intersection_test;
 use parry2d::shape::{Triangle as PTriangle, Cuboid};
 use parry2d::math::{Vector, Isometry, Point};
 
-#[derive(Deserialize, Debug)]
-struct Triangle {
+#[derive(Deserialize, Debug, Clone)]
+pub struct Triangle {
     pub a: [f32; 2],
     pub b: [f32; 2],
     pub c: [f32; 2],
@@ -13,7 +13,7 @@ struct Triangle {
 
 #[derive(Deserialize)]
 pub struct TrackLimits {
-    triangles: Vec<Triangle>,
+    pub triangles: Vec<Triangle>,
 }
 
 impl TrackLimits {
