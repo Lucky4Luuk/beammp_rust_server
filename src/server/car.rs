@@ -26,6 +26,7 @@ pub struct Car {
     pub latest_vel_angle_to_track: f32,
 
     pub laps: usize,
+    pub laps_ui_dirty: bool,
     pub lap_start: Option<Instant>,
     pub lap_times: Vec<Duration>,
 
@@ -48,6 +49,7 @@ impl Car {
             latest_vel_angle_to_track: 0.0,
 
             laps: 0,
+            laps_ui_dirty: true,
             lap_start: None,
             lap_times: Vec::new(),
 

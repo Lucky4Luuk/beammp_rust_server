@@ -20,6 +20,7 @@ use serde::Deserialize;
 use super::backend::*;
 use super::car::*;
 use super::packet::*;
+use super::overlay::Overlay;
 
 static ATOMIC_ID_COUNTER: AtomicU8 = AtomicU8::new(0);
 
@@ -52,6 +53,8 @@ pub struct Client {
     pub state: ClientState,
     pub info: Option<UserData>,
     pub cars: Vec<(u8, Car)>,
+
+    pub overlay: Option<Overlay>,
 }
 
 impl Drop for Client {
@@ -96,6 +99,8 @@ impl Client {
             state: ClientState::Connecting,
             info: None,
             cars: Vec::new(),
+
+            overlay: None,
         }
     }
 
@@ -207,6 +212,17 @@ impl Client {
         Ok(None)
     }
 
+    pub async fn update_overlay(&mut self) {
+        if let Some(overlay) = &mut self.overlay {
+            if let Some((_, car)) = self.cars.get_mut(0) {
+                if car.laps_ui_dirty {
+                    overlay.set_laps(car.laps).await;
+                    car.laps_ui_dirty = false;
+                }
+            }
+        }
+    }
+
     pub fn disconnect(&mut self) {
         self.state = ClientState::Disconnect;
     }
@@ -302,7 +318,7 @@ impl Client {
             Err(e) => return Err(e.into()),
         }
 
-        let mut data = vec![0u8; 4096];
+        let mut data = vec![0u8; u32::from_le_bytes(header) as usize];
         let data_size;
         match self.socket.try_read(&mut data) {
             Ok(0) => {

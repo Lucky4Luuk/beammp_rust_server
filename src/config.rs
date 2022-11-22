@@ -10,6 +10,7 @@ pub struct Config {
 #[derive(Deserialize)]
 pub struct NetworkSettings {
     pub port: Option<u16>,
+    pub overlay_port: Option<u16>,
 }
 
 #[derive(Deserialize)]

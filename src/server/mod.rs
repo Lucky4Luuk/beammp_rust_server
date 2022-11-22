@@ -14,6 +14,7 @@ mod packet;
 mod track_limits;
 mod spawns;
 mod track_path;
+mod overlay;
 
 pub use backend::*;
 pub use car::*;
@@ -22,6 +23,7 @@ pub use packet::*;
 pub use track_limits::*;
 pub use spawns::*;
 pub use track_path::*;
+pub use overlay::*;
 
 pub use crate::config::Config;
 
@@ -38,12 +40,17 @@ enum ServerState {
 
 pub struct Server {
     tcp_listener: Arc<TcpListener>,
+    tcp_listener_overlay: Arc<TcpListener>,
     udp_socket: Arc<UdpSocket>,
 
     clients_incoming: Arc<Mutex<Vec<Client>>>,
+    overlay_incoming: Arc<Mutex<Vec<(String, Overlay)>>>,
+
     pub clients: Vec<Client>,
+    unconnected_overlays: Vec<(String, Overlay)>,
 
     connect_runtime_handle: JoinHandle<()>,
+    connect_overlay_runtime_handle: JoinHandle<()>,
 
     config: Arc<Config>,
 
@@ -66,17 +73,28 @@ impl Server {
         let config_ref = Arc::clone(&config);
 
         let port = config.network.port.unwrap_or(48900);
-        debug!("Server started on port {}", port);
+        let overlay_port = config.network.overlay_port.unwrap_or(48901);
+        debug!("Server started on port {} / {}", port, overlay_port);
 
-        let bind_addr = &format!("0.0.0.0:{}", port);
-        let tcp_listener = Arc::new(TcpListener::bind(bind_addr).await?);
+        let tcp_listener = {
+            let bind_addr = &format!("0.0.0.0:{}", port);
+            Arc::new(TcpListener::bind(bind_addr).await?)
+        };
         let tcp_listener_ref = Arc::clone(&tcp_listener);
 
-        let udp_socket = Arc::new(UdpSocket::bind(bind_addr).await?);
+        let tcp_listener_overlay = {
+            let bind_addr = &format!("0.0.0.0:{}", overlay_port);
+            Arc::new(TcpListener::bind(bind_addr).await?)
+        };
+        let tcp_listener_overlay_ref = Arc::clone(&tcp_listener_overlay);
+
+        let udp_socket = {
+            let bind_addr = &format!("0.0.0.0:{}", port);
+            Arc::new(UdpSocket::bind(bind_addr).await?)
+        };
 
         let clients_incoming = Arc::new(Mutex::new(Vec::new()));
         let clients_incoming_ref = Arc::clone(&clients_incoming);
-
         debug!("Client acception runtime starting...");
         let connect_runtime_handle = tokio::spawn(async move {
             loop {
@@ -106,6 +124,36 @@ impl Server {
             }
         });
         debug!("Client acception runtime started!");
+
+        let overlay_incoming = Arc::new(Mutex::new(Vec::new()));
+        let overlay_incoming_ref = Arc::clone(&overlay_incoming);
+        debug!("Overlay acception runtime starting...");
+        let connect_overlay_runtime_handle = tokio::spawn(async move {
+            loop {
+                match tcp_listener_overlay_ref.accept().await {
+                    Ok((socket, addr)) => {
+                        info!("New overlay connected: {:?}", addr);
+
+                        match Overlay::new(socket).await {
+                            Ok(overlay) => {
+                                let mut lock = overlay_incoming_ref
+                                    .lock()
+                                    .map_err(|e| error!("{:?}", e))
+                                    .expect("Failed to acquire lock on mutex!");
+                                lock.push(overlay);
+                                drop(lock);
+                            }
+                            Err(e) => {
+                                error!("Overlay connection error occurred...");
+                                error!("{:?}", e);
+                            }
+                        }
+                    }
+                    Err(e) => error!("Failed to accept incoming connection: {:?}", e),
+                }
+            }
+        });
+        debug!("Overlay acception runtime started!");
 
         let track_limits = if let Some(limits_file) = &config.game.map_limits {
             Some(serde_json::from_str(&std::fs::read_to_string(limits_file)?)?)
@@ -144,12 +192,17 @@ impl Server {
 
         Ok(Self {
             tcp_listener: tcp_listener,
+            tcp_listener_overlay: tcp_listener_overlay,
             udp_socket: udp_socket,
 
             clients_incoming: clients_incoming,
+            overlay_incoming: overlay_incoming,
+
             clients: Vec::new(),
+            unconnected_overlays: Vec::new(),
 
             connect_runtime_handle: connect_runtime_handle,
+            connect_overlay_runtime_handle: connect_overlay_runtime_handle,
 
             config: config,
 
@@ -191,6 +244,27 @@ impl Server {
                     self.clients.push(clients_incoming_lock.swap_remove(i));
                 }
                 trace!("Accepted incoming clients!");
+            }
+        }
+
+        // Same thing here, but instead accepting overlay connections
+        if let Ok(mut overlay_incoming_lock) = self.overlay_incoming.try_lock() {
+            if overlay_incoming_lock.len() > 0 {
+                trace!(
+                    "Accepting {} incoming overlay connections...",
+                    overlay_incoming_lock.len()
+                );
+                for i in 0..overlay_incoming_lock.len() {
+                    self.unconnected_overlays.push(overlay_incoming_lock.swap_remove(i));
+                }
+                trace!("Accepted incoming overlay connections!");
+            }
+        }
+        if self.unconnected_overlays.len() > 0 {
+            for j in 0..self.clients.len() {
+                if self.clients.get(j).ok_or(ServerError::ClientDoesntExist)?.info.as_ref().unwrap().username == self.unconnected_overlays[0].0 {
+                    self.clients[j].overlay = Some(self.unconnected_overlays.swap_remove(0).1);
+                }
             }
         }
 
@@ -258,6 +332,11 @@ impl Server {
             }
         }
 
+        // Overlay updating
+        for client in &mut self.clients {
+            client.update_overlay().await;
+        }
+
         // Physics
         if self.config.game.server_physics {
             todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
@@ -270,7 +349,7 @@ impl Server {
                     if let Some(limits) = &self.track_limits {
                         if limits.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
                             if let Some(start) = car.offtrack_start {
-                                println!("Client went {} seconds offtrack!", start.elapsed().as_secs_f32());
+                                debug!("Client went {} seconds offtrack!", start.elapsed().as_secs_f32());
                             }
                             car.offtrack_start = None;
                         } else {
@@ -311,7 +390,7 @@ impl Server {
                         // debug!("angle diff: {}", angle_diff);
                         // debug!("angle vel diff: {}", angle_vel_diff);
                         let progress = path.get_percentage_along_track([car.pos.x as f32, car.pos.y as f32]);
-                        debug!("progress: {}", progress);
+                        // debug!("progress: {}", progress);
                     }
                 }
             }
@@ -332,6 +411,7 @@ impl Server {
                                             car.add_lap_time(last.elapsed());
                                         }
                                         car.laps += 1;
+                                        car.laps_ui_dirty = true;
                                         car.lap_start = Some(Instant::now());
                                         car.next_checkpoint = 1;
                                     }
@@ -726,6 +806,10 @@ impl Server {
         match code {
             's' => {
                 let client = &mut self.clients[client_idx];
+                let mut allowed = self.allowed_spawns;
+                if let Some(max_cars) = self.config.game.max_cars {
+                    if client.cars.len() >= max_cars as usize { allowed = false; }
+                }
                 // trace!("Packet string: `{}`", packet.data_as_string());
                 let split_data = packet
                     .data_as_string()
@@ -736,10 +820,6 @@ impl Server {
                 // let car_json: serde_json::Value = serde_json::from_str(&car_json_str)?;
                 let car_id = client.register_car(Car::new(car_json_str.to_string()));
                 let client_id = client.get_id();
-                let mut allowed = self.allowed_spawns;
-                if let Some(max_cars) = self.config.game.max_cars {
-                    allowed = allowed && (client.cars.len() >= max_cars as usize)
-                }
                 if allowed {
                     let packet_data = format!(
                         "Os:{}:{}:{}-{}:{}",
