@@ -12,6 +12,7 @@ map_spawns_pit = "west_coast_usa_spawns_pit.json"
 map_checkpoints = ["west_coast_usa_cp0.json", "west_coast_usa_cp1.json", "west_coast_usa_cp2.json"]
 server_physics = false # Broken
 max_cars = 1
+max_laps = 5
 
 [event]
-expected_clients = ["luuk-bepis"] # , "Firerock"
+expected_clients = ["luuk-bepis", "LordJuvenile"] # , "Firerock"

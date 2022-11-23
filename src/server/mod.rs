@@ -66,6 +66,8 @@ pub struct Server {
     server_state_start: Instant,
 
     allowed_spawns: bool,
+    force_respawn_pit: bool,
+    allow_respawns: bool,
 }
 
 impl Server {
@@ -218,6 +220,8 @@ impl Server {
             server_state_start: Instant::now(),
 
             allowed_spawns: false,
+            force_respawn_pits: false,
+            allow_respawns: true,
         })
     }
 
@@ -335,6 +339,10 @@ impl Server {
         // Overlay updating
         for client in &mut self.clients {
             client.update_overlay().await;
+            let max_laps = if self.server_state == ServerState::Race { self.config.game.max_laps.unwrap_or(0) } else { 0 };
+            if let Some(overlay) = &mut client.overlay {
+                overlay.set_max_laps(max_laps);
+            }
         }
 
         // Physics
@@ -465,8 +473,6 @@ impl Server {
             }
         }
 
-        let _ = self.track_limits_client.wrapping_add(1);
-
         // Handle server states
         let elapsed = self.server_state_start.elapsed();
         match self.server_state {
@@ -552,6 +558,8 @@ impl Server {
             }
             _ => todo!()
         }
+
+        self.track_limits_client = self.track_limits_client.wrapping_add(1);
 
         Ok(())
     }

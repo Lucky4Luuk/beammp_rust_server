@@ -44,6 +44,13 @@ impl Overlay {
             error!("{:?}", e);
         }
     }
+
+    pub async fn set_max_laps(&mut self, max_laps: usize) {
+        let _ = self.socket.writable().await;
+        if let Err(e) = self.socket.write(format!("M{}", max_laps).as_bytes()).await {
+            error!("{:?}", e);
+        }
+    }
 }
 
 #[derive(Debug)]

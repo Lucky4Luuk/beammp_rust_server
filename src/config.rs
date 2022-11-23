@@ -24,6 +24,7 @@ pub struct GameSettings {
     pub map_checkpoints: Option<Vec<String>>,
     pub server_physics: bool,
     pub max_cars: Option<u8>,
+    pub max_laps: Option<usize>,
 }
 
 #[derive(Deserialize)]
