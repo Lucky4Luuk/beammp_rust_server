@@ -65,8 +65,8 @@ pub struct Server {
     server_state: ServerState,
     server_state_start: Instant,
 
-    allowed_spawns: bool,
-    force_respawn_pit: bool,
+    allow_spawns: bool,
+    force_respawn_pits: bool,
     allow_respawns: bool,
 }
 
@@ -219,7 +219,7 @@ impl Server {
             server_state: ServerState::WaitingForClients,
             server_state_start: Instant::now(),
 
-            allowed_spawns: false,
+            allow_spawns: false,
             force_respawn_pits: false,
             allow_respawns: true,
         })
@@ -342,6 +342,7 @@ impl Server {
             let max_laps = if self.server_state == ServerState::Race { self.config.game.max_laps.unwrap_or(0) } else { 0 };
             if let Some(overlay) = &mut client.overlay {
                 overlay.set_max_laps(max_laps);
+                overlay.set_state(&self.server_state);
             }
         }
 
@@ -509,13 +510,13 @@ impl Server {
                         // All expected clients are in the server
                         info!("All clients connected!");
                         self.server_state = ServerState::WaitingForSpawns;
-                        self.allowed_spawns = true;
+                        self.allow_spawns = true;
                     }
                 } else {
                     self.connect_runtime_handle.abort();
                     info!("Clients no longer allowed to join!");
                     self.server_state = ServerState::WaitingForSpawns;
-                    self.allowed_spawns = true;
+                    self.allow_spawns = true;
                 }
             }
             ServerState::WaitingForSpawns => {
@@ -528,6 +529,8 @@ impl Server {
                 if has_spawned == self.clients.len() {
                     info!("All clients have spawned a car!");
                     self.server_state = ServerState::Qualifying;
+                    self.allow_spawns = false;
+                    self.force_respawn_pits = true;
                     let mut i = 0;
                     for client in &self.clients {
                         for (id, car) in &client.cars {
@@ -814,7 +817,7 @@ impl Server {
         match code {
             's' => {
                 let client = &mut self.clients[client_idx];
-                let mut allowed = self.allowed_spawns;
+                let mut allowed = self.allow_spawns;
                 if let Some(max_cars) = self.config.game.max_cars {
                     if client.cars.len() >= max_cars as usize { allowed = false; }
                 }
@@ -911,9 +914,35 @@ impl Server {
                 info!("Deleted car for client #{}!", client_id);
             }
             'r' => {
-                debug!("Or: {:?}", packet);
-                self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id))
-                    .await;
+                // TODO: Handle self.allow_respawns (give time penalty in pits? DQ?)
+                if self.force_respawn_pits {
+                    debug!("Respawning in pits!");
+                    let client_id = packet.data[3] - 48;
+                    let car_id = packet.data[5] - 48;
+                    debug!("client_id: {} / car_id: {}", client_id, car_id);
+                    let spawn = self.track_spawns_pit.as_ref().expect("Map did not have pit lane spawns set up!").get_client_spawn(client_id);
+                    if let Ok(json) = serde_json::to_string(&RespawnPacketData {
+                        pos: RespawnPacketDataPos {
+                            x: spawn.pos[0],
+                            y: spawn.pos[1],
+                            z: spawn.pos[2],
+                        },
+                        rot: RespawnPacketDataRot {
+                            x: spawn.rot[0],
+                            y: spawn.rot[1],
+                            z: spawn.rot[2],
+                            w: spawn.rot[3]
+                        },
+                    }) {
+                        let packet_data = format!("Or:{}-{}:{}", client_id, car_id, json);
+                        self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
+                    } else {
+                        // TODO: Handle this edge case better!
+                        self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
+                    }
+                } else {
+                    self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
+                }
             }
             't' => {
                 self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id))

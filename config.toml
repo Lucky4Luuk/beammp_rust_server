@@ -15,4 +15,4 @@ max_cars = 1
 max_laps = 5
 
 [event]
-expected_clients = ["luuk-bepis", "LordJuvenile"] # , "Firerock"
+expected_clients = ["luuk-bepis"] # , "LordJuvenile" , "Firerock"

@@ -1,6 +1,8 @@
 use tokio::net::TcpStream;
 use tokio::io::AsyncWriteExt;
 
+use super::ServerState;
+
 pub struct Overlay {
     socket: TcpStream,
 }
@@ -48,6 +50,18 @@ impl Overlay {
     pub async fn set_max_laps(&mut self, max_laps: usize) {
         let _ = self.socket.writable().await;
         if let Err(e) = self.socket.write(format!("M{}", max_laps).as_bytes()).await {
+            error!("{:?}", e);
+        }
+    }
+
+    pub async fn set_state(&mut self, state: &ServerState) {
+        let _ = self.socket.writable().await;
+        let state_id = match state {
+            ServerState::Qualifying => 1,
+            ServerState::Race => 2,
+            _ => 0,
+        };
+        if let Err(e) = self.socket.write(format!("S{}", state_id).as_bytes()).await {
             error!("{:?}", e);
         }
     }
