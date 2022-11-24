@@ -74,6 +74,7 @@ pub struct Server {
     allow_respawns: bool,
 
     overlay_update_time: Instant,
+    generic_timer0: Instant,
 }
 
 impl Server {
@@ -245,6 +246,7 @@ impl Server {
             allow_respawns: true,
 
             overlay_update_time: Instant::now(),
+            generic_timer0: Instant::now(),
         })
     }
 
@@ -631,7 +633,8 @@ impl Server {
                 }
             }
             ServerState::LiningUp => {
-                if self.server_state_start.elapsed().as_secs() % 2 == 0 {
+                if self.generic_timer0.elapsed().as_secs() > 0 {
+                    self.generic_timer0 = Instant::now();
                     let mut all_ready = true;
                     for (i, client) in self.clients.iter().enumerate() {
                         if !client.ready {
