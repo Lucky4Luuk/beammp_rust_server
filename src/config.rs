@@ -20,11 +20,17 @@ pub struct GameSettings {
     pub map_limits_pit: Option<String>,
     pub map_limits_pit_exit: Option<String>,
     pub map_finish: Option<String>,
+
     pub map_spawns_pit: Option<String>,
+    pub map_spawns_odd: Option<String>,
+    pub map_spawns_even: Option<String>,
+
     pub map_checkpoints: Option<Vec<String>>,
+
     pub server_physics: bool,
     pub max_cars: Option<u8>,
     pub max_laps: Option<usize>,
+    pub qual_time: Option<usize>,
 }
 
 #[derive(Deserialize)]

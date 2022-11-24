@@ -60,7 +60,7 @@ impl Car {
     }
 
     pub fn add_lap_time(&mut self, duration: Duration) {
-        debug!("lap time: {}:{}.{}", (duration.as_secs_f32() / 60.0).floor(), duration.as_secs_f32() % 60.0, duration.subsec_millis());
+        debug!("lap time: {}:{}.{}", (duration.as_secs_f32() / 60.0).floor(), (duration.as_secs_f32() % 60.0) as usize, duration.subsec_millis());
         self.lap_times.push(duration);
     }
 }

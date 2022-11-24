@@ -40,30 +40,51 @@ impl Overlay {
         ) )
     }
 
-    pub async fn set_laps(&mut self, laps: usize) {
-        let _ = self.socket.writable().await;
-        if let Err(e) = self.socket.write(format!("L{}", laps).as_bytes()).await {
+    async fn write(&mut self, data: &[u8]) {
+        if let Err(e) = self.socket.write(&(data.len() as u32).to_le_bytes()).await {
             error!("{:?}", e);
         }
+        if let Err(e) = self.socket.write(data).await {
+            error!("{:?}", e);
+        }
+    }
+
+    pub async fn set_laps(&mut self, laps: usize) {
+        let data = format!("L{}", laps);
+        let data = data.as_bytes();
+        let _ = self.socket.writable().await;
+        self.write(&data).await;
     }
 
     pub async fn set_max_laps(&mut self, max_laps: usize) {
+        let data = format!("M{}", max_laps);
+        let data = data.as_bytes();
         let _ = self.socket.writable().await;
-        if let Err(e) = self.socket.write(format!("M{}", max_laps).as_bytes()).await {
-            error!("{:?}", e);
-        }
+        self.write(&data).await;
     }
 
     pub async fn set_state(&mut self, state: &ServerState) {
-        let _ = self.socket.writable().await;
         let state_id = match state {
             ServerState::Qualifying => 1,
             ServerState::Race => 2,
             _ => 0,
         };
-        if let Err(e) = self.socket.write(format!("S{}", state_id).as_bytes()).await {
-            error!("{:?}", e);
-        }
+        let data = format!("S{}", state_id);
+        let data = data.as_bytes();
+        let _ = self.socket.writable().await;
+        self.write(&data).await;
+    }
+
+    pub async fn set_lap_times(&mut self, laps: &Vec<std::time::Duration>) {
+        let data = laps
+            .iter()
+            .map(|duration| format!("{}:{}.{}", (duration.as_secs_f32() / 60.0).floor(), (duration.as_secs_f32() % 60.0) as usize, duration.subsec_millis()))
+            .collect::<Vec<String>>()
+            .join("-");
+        let data = format!("Q{}", data);
+        let data = data.as_bytes();
+        let _ = self.socket.writable().await;
+        self.write(&data).await;
     }
 }
 

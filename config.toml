@@ -9,10 +9,13 @@ map_limits_pit = "west_coast_usa_pit.json"
 map_limits_pit_exit = "west_coast_usa_pit_exit.json"
 map_finish = "west_coast_usa_finish.json"
 map_spawns_pit = "west_coast_usa_spawns_pit.json"
+map_spawns_odd = "west_coast_usa_spawns_odd.json"
+map_spawns_even = "west_coast_usa_spawns_even.json"
 map_checkpoints = ["west_coast_usa_cp0.json", "west_coast_usa_cp1.json", "west_coast_usa_cp2.json"]
 server_physics = false # Broken
 max_cars = 1
 max_laps = 5
+qual_time = 30
 
 [event]
 expected_clients = ["luuk-bepis"] # , "LordJuvenile" , "Firerock"

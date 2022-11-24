@@ -30,6 +30,7 @@ pub use crate::config::Config;
 #[derive(PartialEq)]
 enum ServerState {
     WaitingForClients,
+    WaitingForReady,
     WaitingForSpawns,
     Qualifying,
     LiningUp,
@@ -60,6 +61,9 @@ pub struct Server {
     track_limits_client: u8, // The client to check this loop, also serves as a timer for checking
 
     track_spawns_pit: Option<Spawns>,
+    track_spawns_odd: Option<Spawns>,
+    track_spawns_even: Option<Spawns>,
+
     track_checkpoints: Vec<TrackPath>,
 
     server_state: ServerState,
@@ -68,6 +72,8 @@ pub struct Server {
     allow_spawns: bool,
     force_respawn_pits: bool,
     allow_respawns: bool,
+
+    overlay_update_time: Instant,
 }
 
 impl Server {
@@ -181,6 +187,18 @@ impl Server {
             None
         };
 
+        let track_spawns_odd = if let Some(spawns_file) = &config.game.map_spawns_odd {
+            Some(serde_json::from_str(&std::fs::read_to_string(spawns_file)?)?)
+        } else {
+            None
+        };
+
+        let track_spawns_even = if let Some(spawns_file) = &config.game.map_spawns_even {
+            Some(serde_json::from_str(&std::fs::read_to_string(spawns_file)?)?)
+        } else {
+            None
+        };
+
         let track_checkpoints = if let Some(cp_list) = &config.game.map_checkpoints {
             // Some(cp_list.iter().map(|file| serde_json::from_str(&std::fs::read_to_string(path_file)?)?).collect())
             let mut list = Vec::new();
@@ -214,6 +232,9 @@ impl Server {
             track_limits_client: 0,
 
             track_spawns_pit: track_spawns_pit,
+            track_spawns_odd: track_spawns_odd,
+            track_spawns_even: track_spawns_even,
+
             track_checkpoints: track_checkpoints,
 
             server_state: ServerState::WaitingForClients,
@@ -222,7 +243,14 @@ impl Server {
             allow_spawns: false,
             force_respawn_pits: false,
             allow_respawns: true,
+
+            overlay_update_time: Instant::now(),
         })
+    }
+
+    pub fn set_server_state(&mut self, state: ServerState) {
+        self.server_state = state;
+        self.server_state_start = Instant::now();
     }
 
     pub async fn process(&mut self) -> anyhow::Result<()> {
@@ -339,10 +367,14 @@ impl Server {
         // Overlay updating
         for client in &mut self.clients {
             client.update_overlay().await;
-            let max_laps = if self.server_state == ServerState::Race { self.config.game.max_laps.unwrap_or(0) } else { 0 };
-            if let Some(overlay) = &mut client.overlay {
-                overlay.set_max_laps(max_laps);
-                overlay.set_state(&self.server_state);
+
+            if self.overlay_update_time.elapsed().as_secs() > 1 {
+                let max_laps = if self.server_state == ServerState::Race { self.config.game.max_laps.unwrap_or(0) } else { 0 };
+                if let Some(overlay) = &mut client.overlay {
+                    overlay.set_max_laps(max_laps).await;
+                    overlay.set_state(&self.server_state).await;
+                }
+                self.overlay_update_time = Instant::now();
             }
         }
 
@@ -508,15 +540,26 @@ impl Server {
                     }
                     if joined_clients.len() == 0 {
                         // All expected clients are in the server
+                        self.connect_runtime_handle.abort();
                         info!("All clients connected!");
-                        self.server_state = ServerState::WaitingForSpawns;
-                        self.allow_spawns = true;
+                        self.set_server_state(ServerState::WaitingForReady);
                     }
                 } else {
                     self.connect_runtime_handle.abort();
                     info!("Clients no longer allowed to join!");
-                    self.server_state = ServerState::WaitingForSpawns;
+                    self.set_server_state(ServerState::WaitingForReady);
+                }
+            }
+            ServerState::WaitingForReady => {
+                let mut all_ready = true;
+                for client in &self.clients {
+                    if !client.ready {
+                        all_ready = false;
+                    }
+                }
+                if all_ready {
                     self.allow_spawns = true;
+                    self.set_server_state(ServerState::WaitingForSpawns);
                 }
             }
             ServerState::WaitingForSpawns => {
@@ -528,7 +571,7 @@ impl Server {
                 }
                 if has_spawned == self.clients.len() {
                     info!("All clients have spawned a car!");
-                    self.server_state = ServerState::Qualifying;
+                    self.set_server_state(ServerState::Qualifying);
                     self.allow_spawns = false;
                     self.force_respawn_pits = true;
                     let mut i = 0;
@@ -557,6 +600,90 @@ impl Server {
                 }
             }
             ServerState::Qualifying => {
+                if self.server_state_start.elapsed().as_secs() > self.config.game.qual_time.unwrap_or(120) as u64 {
+                    // Qualifying is over!
+                    debug!("Qualifying is over!");
+                    self.allow_respawns = false;
+
+                    // Gather fastest times
+                    let mut lap_id = Vec::new();
+                    for (i, client) in self.clients.iter().enumerate() {
+                        let mut fastest_lap = u128::MAX;
+                        for (id, car) in &client.cars {
+                            for lap in &car.lap_times {
+                                if lap.as_millis() < fastest_lap {
+                                    fastest_lap = lap.as_millis();
+                                }
+                            }
+                        }
+                        lap_id.push((i, fastest_lap));
+                    }
+
+                    // TODO: Store client ids in grid order
+
+                    self.set_server_state(ServerState::LiningUp);
+                    self.allow_respawns = false;
+                    self.allow_spawns = false;
+
+                    for client in &mut self.clients {
+                        client.ready = false; // Require them to go ready again!
+                    }
+                }
+            }
+            ServerState::LiningUp => {
+                if self.server_state_start.elapsed().as_secs() % 2 == 0 {
+                    let mut all_ready = true;
+                    for (i, client) in self.clients.iter().enumerate() {
+                        if !client.ready {
+                            all_ready = false;
+                        }
+
+                        // Check client delta to their grid spot
+                        // TODO: Get grid spot based on grid order
+                        let grid_spot;
+                        if i % 2 == 0 {
+                            // Even
+                            let grid_spot_id = i / 2;
+                            grid_spot = self.track_spawns_even.as_ref().expect("Map does not have spawns set up!").get_client_spawn(grid_spot_id as u8);
+                        } else if i % 2 == 1 {
+                            // Odd
+                            let grid_spot_id = i / 2 -1;
+                            grid_spot = self.track_spawns_odd.as_ref().expect("Map does not have spawns set up!").get_client_spawn(grid_spot_id as u8);
+                        } else {
+                            unreachable!();
+                        }
+                        if let Some((id, car)) = client.cars.get(0) {
+                            let delta = crate::util::distance3d(grid_spot.pos, [car.pos.x, car.pos.y, car.pos.z]);
+                            if delta > 1.0 {
+                                if let Ok(json) = serde_json::to_string(&RespawnPacketData {
+                                    pos: RespawnPacketDataPos {
+                                        x: grid_spot.pos[0],
+                                        y: grid_spot.pos[1],
+                                        z: grid_spot.pos[2],
+                                    },
+                                    rot: RespawnPacketDataRot {
+                                        x: grid_spot.rot[0],
+                                        y: grid_spot.rot[1],
+                                        z: grid_spot.rot[2],
+                                        w: grid_spot.rot[3]
+                                    },
+                                }) {
+                                    let packet_data = format!("Or:{}-{}:{}", client.id, id, json);
+                                    self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
+                                }
+                            }
+                        }
+                    }
+                    if all_ready {
+                        self.set_server_state(ServerState::Countdown);
+                        // TODO: Update the overlay immediately, to prevent countdown desync
+                    }
+                }
+            }
+            ServerState::Countdown => {
+
+            }
+            ServerState::Race => {
 
             }
             _ => todo!()
@@ -782,14 +909,22 @@ impl Server {
                     'O' => self.parse_vehicle_packet(client_idx, packet).await?,
                     'C' => {
                         // TODO: Chat filtering?
-                        self.broadcast(
-                            Packet::Notification(NotificationPacket::new(
-                                packet.data_as_string().clone(),
-                            )),
-                            None,
-                        )
-                        .await;
-                        self.broadcast(Packet::Raw(packet), None).await;
+                        let packet_data = packet.data_as_string();
+                        let message = packet_data.split(":").collect::<Vec<&str>>().get(2).map(|s| s.to_string()).unwrap_or(String::new());
+                        let message = message.trim();
+                        if message.starts_with("!") {
+                            if message == "!ready" {
+                                self.clients[client_idx].ready = true;
+                                self.clients[client_idx].queue_packet(Packet::Raw(RawPacket::from_str("C:Server:You are now ready!"))).await;
+                            } else if message == "!pos" {
+                                let car = &self.clients[client_idx].cars.get(0).ok_or(ServerError::CarDoesntExist)?.1;
+                                trace!("car transform (pos/rot/vel/rvel): {:?}", (car.pos, car.rot, car.vel, car.rvel));
+                            } else {
+                                self.clients[client_idx].queue_packet(Packet::Raw(RawPacket::from_str("C:Server:Unknown command!"))).await;
+                            }
+                        } else {
+                            self.broadcast(Packet::Raw(packet), None).await;
+                        }
                     }
                     _ => {
                         let string_data = String::from_utf8_lossy(&packet.data[..]);

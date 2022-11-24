@@ -55,6 +55,8 @@ pub struct Client {
     pub cars: Vec<(u8, Car)>,
 
     pub overlay: Option<Overlay>,
+
+    pub ready: bool,
 }
 
 impl Drop for Client {
@@ -101,6 +103,8 @@ impl Client {
             cars: Vec::new(),
 
             overlay: None,
+
+            ready: false,
         }
     }
 
@@ -217,6 +221,7 @@ impl Client {
             if let Some((_, car)) = self.cars.get_mut(0) {
                 if car.laps_ui_dirty {
                     overlay.set_laps(car.laps).await;
+                    overlay.set_lap_times(&car.lap_times).await;
                     car.laps_ui_dirty = false;
                 }
             }

@@ -64,7 +64,3 @@ impl TrackPath {
         }.check_limits(client_pos, client_size_half)
     }
 }
-
-fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
-    ((b[0] - a[0]).powf(2.0) + (b[1] - a[1]).powf(2.0)).sqrt()
-}
