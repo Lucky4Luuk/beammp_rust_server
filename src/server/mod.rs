@@ -73,6 +73,7 @@ pub struct Server {
 
     server_state: ServerState,
     server_state_start: Instant,
+    countdown: u8,
 
     allow_spawns: bool,
     force_respawn_pits: bool,
@@ -245,6 +246,7 @@ impl Server {
 
             server_state: ServerState::WaitingForClients,
             server_state_start: Instant::now(),
+            countdown: 5,
 
             allow_spawns: false,
             force_respawn_pits: false,
@@ -569,16 +571,24 @@ impl Server {
                     self.allow_spawns = true;
                     self.connect_runtime_handle.abort(); // Only abort here, otherwise we might stop joining clients from finishing joining
                     self.set_server_state(ServerState::WaitingForSpawns);
+
+                    for client in &mut self.clients {
+                        client.ready = false;
+                    }
                 }
             }
             ServerState::WaitingForSpawns => {
                 let mut has_spawned = 0;
+                let mut all_ready = true;
                 for client in &self.clients {
                     if client.cars.len() > 0 {
                         has_spawned += 1;
                     }
+                    if !client.ready {
+                        all_ready = false;
+                    }
                 }
-                if has_spawned == self.clients.len() {
+                if has_spawned == self.clients.len() && all_ready {
                     info!("All clients have spawned a car!");
                     self.set_server_state(ServerState::Qualifying);
                     self.allow_spawns = false;
@@ -601,7 +611,7 @@ impl Server {
                                 },
                             }) {
                                 let packet_data = format!("Or:{}-{}:{}", client.id, id, json);
-                                self.broadcast_udp(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
+                                self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
                             }
                             i += 1;
                         }
@@ -626,6 +636,17 @@ impl Server {
                             }
                         }
                         lap_id.push((i, fastest_lap));
+                    }
+
+                    // Reset client lap counters and such
+                    for client in &mut self.clients {
+                        for (_, car) in &mut client.cars {
+                            car.laps = 0;
+                            car.lap_times = Vec::new();
+                            car.next_checkpoint = 0;
+                            car.lap_start = None;
+                            car.offtrack_start = None;
+                        }
                     }
 
                     // TODO: Store client ids in grid order
@@ -683,7 +704,7 @@ impl Server {
                                     },
                                 }) {
                                     let packet_data = format!("Or:{}-{}:{}", client.id, id, json);
-                                    self.broadcast_udp(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
+                                    self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None);
                                 }
                             }
                         }
@@ -706,7 +727,18 @@ impl Server {
                 }
             }
             ServerState::Countdown => {
-
+                if self.generic_timer0.elapsed().as_millis() > 1000 && self.countdown > 0 {
+                    self.countdown -= 1;
+                    for client in &mut self.clients {
+                        if let Some(overlay) = &mut client.overlay {
+                            overlay.set_countdown(self.countdown).await;
+                        }
+                    }
+                    if self.countdown == 0 {
+                        self.server_state = ServerState::Race;
+                    }
+                    self.generic_timer0 = Instant::now();
+                }
             }
             ServerState::Race => {
 
@@ -745,8 +777,28 @@ impl Server {
     }
 
     async fn send_udp(&self, udp_addr: SocketAddr, packet: &Packet) {
-        if let Err(e) = self.udp_socket.try_send_to(&packet.get_data(), udp_addr) {
-            error!("UDP Packet send error: {:?}", e);
+        let data = packet.get_data();
+        if data.len() > 400 {
+            trace!("Compressing...");
+            let mut compressed: Vec<u8> = Vec::with_capacity(100_000);
+            let mut compressor = flate2::Compress::new(flate2::Compression::best(), true);
+            if let Err(e) = compressor.compress_vec(
+                data,
+                &mut compressed,
+                flate2::FlushCompress::Sync,
+            ) {
+                error!("Compression failed!");
+                return;
+            }
+            let mut new_data = "ABG:".as_bytes()[..4].to_vec();
+            new_data.append(&mut compressed);
+            if let Err(e) = self.udp_socket.try_send_to(&new_data, udp_addr) {
+                error!("UDP Packet send error: {:?}", e);
+            }
+        } else {
+            if let Err(e) = self.udp_socket.try_send_to(&data, udp_addr) {
+                error!("UDP Packet send error: {:?}", e);
+            }
         }
     }
 
@@ -1001,14 +1053,6 @@ impl Server {
                         car_json_str
                     );
                     let response = RawPacket::from_str(&packet_data);
-                    self.broadcast(
-                        Packet::Notification(NotificationPacket::new(format!(
-                            "Client {} spawned a car (#{})!",
-                            client_id, car_id
-                        ))),
-                        None,
-                    )
-                    .await;
                     self.broadcast(Packet::Raw(response), None).await;
                     info!("Spawned car for client #{}!", client_id);
                 } else {
@@ -1047,9 +1091,10 @@ impl Server {
                         }
                     } else {
                         // Already looping so more efficient to send here
-                        if let Some(udp_addr) = self.clients[i].udp_addr {
-                            self.send_udp(udp_addr, &response).await;
-                        }
+                        // if let Some(udp_addr) = self.clients[i].udp_addr {
+                        //     self.write_udp(udp_addr, &response).await;
+                        // }
+                        self.clients[i].write_packet(response.clone()).await;
                     }
                 }
             }
@@ -1067,9 +1112,10 @@ impl Server {
                         self.clients[i].unregister_car(car_id);
                     }
                     // Don't broadcast, we are already looping anyway
-                    if let Some(udp_addr) = self.clients[i].udp_addr {
-                        self.send_udp(udp_addr, &Packet::Raw(packet.clone())).await;
-                    }
+                    // if let Some(udp_addr) = self.clients[i].udp_addr {
+                    //     self.send_udp(udp_addr, &Packet::Raw(packet.clone())).await;
+                    // }
+                    self.clients[i].write_packet(Packet::Raw(packet.clone())).await;
                 }
                 info!("Deleted car for client #{}!", client_id);
             }
@@ -1079,6 +1125,20 @@ impl Server {
                     debug!("Respawning in pits!");
                     let client_id = packet.data[3] - 48;
                     let car_id = packet.data[5] - 48;
+                    for client in &mut self.clients {
+                        if client.id == client_id {
+                            for (id, car) in &mut client.cars {
+                                if *id == car_id {
+                                    car.next_checkpoint = 0;
+                                    // Yucky code
+                                    if self.server_state == ServerState::Qualifying {
+                                        car.lap_start = None;
+                                        car.offtrack_start = None;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     debug!("client_id: {} / car_id: {}", client_id, car_id);
                     let spawn = self.track_spawns_pit.as_ref().expect("Map did not have pit lane spawns set up!").get_client_spawn(client_id);
                     if let Ok(json) = serde_json::to_string(&RespawnPacketData {
@@ -1095,6 +1155,9 @@ impl Server {
                         },
                     }) {
                         let packet_data = format!("Or:{}-{}:{}", client_id, car_id, json);
+                        if !packet_data.is_ascii() {
+                            trace!("{:?}", packet_data);
+                        }
                         self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
                     } else {
                         // TODO: Handle this edge case better!

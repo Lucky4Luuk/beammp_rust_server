@@ -82,6 +82,13 @@ impl Overlay {
         let _ = self.socket.writable().await;
         self.write(&data).await;
     }
+
+    pub async fn set_countdown(&mut self, countdown: u8) {
+        let data = format!("C{}", countdown);
+        let data = data.as_bytes();
+        let _ = self.socket.writable().await;
+        self.write(&data).await;
+    }
 }
 
 #[derive(Debug)]
