@@ -64,11 +64,7 @@ impl Overlay {
     }
 
     pub async fn set_state(&mut self, state: &ServerState) {
-        let state_id = match state {
-            ServerState::Qualifying => 1,
-            ServerState::Race => 2,
-            _ => 0,
-        };
+        let state_id: u8 = (*state).into();
         let data = format!("S{}", state_id);
         let data = data.as_bytes();
         let _ = self.socket.writable().await;

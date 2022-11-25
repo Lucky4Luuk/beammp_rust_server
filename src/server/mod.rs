@@ -5,6 +5,8 @@ use std::time::Instant;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::task::JoinHandle;
 
+use num_enum::IntoPrimitive;
+
 use nalgebra::*;
 
 mod backend;
@@ -27,8 +29,11 @@ pub use overlay::*;
 
 pub use crate::config::Config;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, IntoPrimitive, Copy, Clone)]
+#[repr(u8)]
 enum ServerState {
+    Unknown = 0,
+
     WaitingForClients,
     WaitingForReady,
     WaitingForSpawns,
@@ -508,12 +513,31 @@ impl Server {
             }
         }
 
+        // Check if clients are allowed to be on the server
+        let required_clients = self.config.event.expected_clients.as_ref().unwrap();
+        let mut kick = Vec::new();
+        for (i, client) in self.clients.iter().enumerate() {
+            let mut allowed = false;
+            'search: for name in required_clients {
+                if client.info.as_ref().unwrap().username.trim() == name.trim() {
+                    allowed = true;
+                    break 'search;
+                }
+            }
+            if !allowed {
+                kick.push(i);
+                debug!("Kicking client! They are not allowed into the server.");
+            }
+        }
+        for i in kick {
+            self.clients[i].kick("Not whitelisted for this server!").await;
+        }
+
         // Handle server states
         let elapsed = self.server_state_start.elapsed();
         match self.server_state {
             ServerState::WaitingForClients => {
                 if self.config.event.expected_clients.is_some() && elapsed.as_secs() < 150 {
-                    let required_clients = self.config.event.expected_clients.as_ref().unwrap();
                     let mut joined_clients = required_clients.clone();
                     joined_clients.retain(|name| {
                         for client in &self.clients {
@@ -523,26 +547,8 @@ impl Server {
                         }
                         true
                     });
-                    let mut kick = Vec::new();
-                    for (i, client) in self.clients.iter().enumerate() {
-                        let mut allowed = false;
-                        'search: for name in required_clients {
-                            if client.info.as_ref().unwrap().username.trim() == name.trim() {
-                                allowed = true;
-                                break 'search;
-                            }
-                        }
-                        if !allowed {
-                            kick.push(i);
-                            debug!("Kicking client! They are not allowed into the server.");
-                        }
-                    }
-                    for i in kick {
-                        self.clients[i].kick("Not whitelisted for this server!").await;
-                    }
                     if joined_clients.len() == 0 {
                         // All expected clients are in the server
-                        self.connect_runtime_handle.abort();
                         info!("All clients connected!");
                         self.set_server_state(ServerState::WaitingForReady);
                     }
@@ -561,6 +567,7 @@ impl Server {
                 }
                 if all_ready {
                     self.allow_spawns = true;
+                    self.connect_runtime_handle.abort(); // Only abort here, otherwise we might stop joining clients from finishing joining
                     self.set_server_state(ServerState::WaitingForSpawns);
                 }
             }
@@ -594,7 +601,7 @@ impl Server {
                                 },
                             }) {
                                 let packet_data = format!("Or:{}-{}:{}", client.id, id, json);
-                                self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
+                                self.broadcast_udp(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
                             }
                             i += 1;
                         }
@@ -626,6 +633,7 @@ impl Server {
                     self.set_server_state(ServerState::LiningUp);
                     self.allow_respawns = false;
                     self.allow_spawns = false;
+                    self.generic_timer0 = Instant::now();
 
                     for client in &mut self.clients {
                         client.ready = false; // Require them to go ready again!
@@ -656,8 +664,11 @@ impl Server {
                             unreachable!();
                         }
                         if let Some((id, car)) = client.cars.get(0) {
-                            let delta = crate::util::distance3d(grid_spot.pos, [car.pos.x, car.pos.y, car.pos.z]);
-                            if delta > 1.0 {
+                            let deltaxy = crate::util::distance([grid_spot.pos[0] as f32, grid_spot.pos[1] as f32], [car.pos.x as f32, car.pos.y as f32]);
+                            let deltaz = (grid_spot.pos[2] - car.pos.z).abs();
+                            debug!("deltaxy: {:?}", deltaxy);
+                            debug!("deltaz: {}", deltaz);
+                            if deltaxy > 0.8 || deltaz > 1.0 {
                                 if let Ok(json) = serde_json::to_string(&RespawnPacketData {
                                     pos: RespawnPacketDataPos {
                                         x: grid_spot.pos[0],
@@ -672,15 +683,26 @@ impl Server {
                                     },
                                 }) {
                                     let packet_data = format!("Or:{}-{}:{}", client.id, id, json);
-                                    self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
+                                    self.broadcast_udp(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
                                 }
                             }
                         }
                     }
                     if all_ready {
                         self.set_server_state(ServerState::Countdown);
-                        // TODO: Update the overlay immediately, to prevent countdown desync
+                        self.generic_timer0 = Instant::now();
                     }
+                }
+                if self.server_state_start.elapsed().as_secs() > 45 {
+                    // Time out on lining up
+                    // Kick all clients who are not ready
+                    for i in 0..self.clients.len() {
+                        if !self.clients[i].ready {
+                            self.clients[i].kick("Not ready in time!");
+                        }
+                    }
+                    self.set_server_state(ServerState::Countdown);
+                    self.generic_timer0 = Instant::now();
                 }
             }
             ServerState::Countdown => {
