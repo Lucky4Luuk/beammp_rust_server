@@ -111,21 +111,34 @@ impl Client {
     pub async fn authenticate(&mut self, config: &super::Config) -> anyhow::Result<()> {
         debug!("Authenticating client {}...", self.id);
 
-        self.socket.readable().await?;
-        // Authentication works a little differently than normal
-        // Not sure why, but the BeamMP source code shows they
-        // also only read a single byte during authentication
-        let code = self.read_raw(1).await?[0];
-
-        match code as char {
-            'C' => {
-                // TODO: Check client version
-                trace!("Client version packet");
-                self.socket.readable().await?;
-                let packet = self.read_packet_waiting().await?;
-                debug!("{:?}", packet);
+        'waiting_for_c: loop {
+            self.socket.readable().await?;
+            let mut tmp = vec![0u8; 1];
+            while self.socket.peek(&mut tmp).await? == 0 {}
+            // Authentication works a little differently than normal
+            // Not sure why, but the BeamMP source code shows they
+            // also only read a single byte during authentication
+            let code = self.read_raw(1).await?[0];
+            debug!("code: '{}' / {}", code as char, code);
+            match code as char {
+                'C' => {
+                    // TODO: Check client version
+                    trace!("Client version packet");
+                    self.socket.readable().await?;
+                    let packet = self.read_packet_waiting().await?;
+                    debug!("{:?}", packet);
+                    break 'waiting_for_c;
+                }
+                'D' => {
+                    let id = self.read_raw(1).await?[0];
+                    debug!("HandleDownload connection for client id: {}", id);
+                    debug!("Not handling this for now!");
+                    return Err(ClientError::IsDownloader.into());
+                }
+                _ => {
+                    return Err(ClientError::AuthenticateError.into());
+                }
             }
-            _ => return Err(ClientError::AuthenticateError.into()),
         }
 
         self.write_packet(Packet::Raw(RawPacket::from_code('S')))
@@ -186,11 +199,27 @@ impl Client {
                 match packet.data[0] as char {
                     'S' if packet.data.len() > 1 => match packet.data[1] as char {
                         'R' => {
-                            self.write_packet(Packet::Raw(RawPacket::from_code('-')))
+                            // let file_packet = RawPacket::from_code('-');
+                            let file_data = "/bepis_dysoon_uu201.zip;/simraceclubclient.zip;51981039;1805;";
+                            let file_packet = RawPacket::from_str(file_data);
+                            self.write_packet(Packet::Raw(file_packet))
                                 .await?
                         }
                         _ => error!("Unknown packet! {:?}", packet),
-                    },
+                    }
+                    'f' => {
+                        // Handle file download
+                        let mut file_name = packet.data_as_string().clone();
+                        file_name.remove(0); // Remove f
+                        debug!("Client requested file {}", file_name);
+                        self.kick(&format!("You have not yet downloaded {}!", file_name)).await;
+                        // let mut lock = self.write_half.lock().await;
+                        // lock.writable().await?;
+                        // trace!("Sending packet!");
+                        // if let Err(e) = tcp_send_file(lock.deref_mut(), file_name).await {
+                        //     error!("{:?}", e);
+                        // }
+                    }
                     _ => error!("Unknown packet! {:?}", packet),
                 }
             }
@@ -363,12 +392,21 @@ impl Client {
         // TODO: If packet gets lost, put it back at the front of the queue?
         let _ = self.write_runtime_sender.send(packet).await;
     }
+
+    pub async fn trigger_client_event<S: Into<String>, D: Into<String>>(&self, event_name: S, data: D) {
+        let event_name = event_name.into();
+        let data = data.into();
+        debug!("Calling client event '{}' with data '{}'", event_name, data);
+        let packet_data = format!("E:{}:{}", event_name, data);
+        self.queue_packet(Packet::Raw(RawPacket::from_str(&packet_data))).await;
+    }
 }
 
 #[derive(Debug)]
 pub enum ClientError {
     AuthenticateError,
     ConnectionTimeout,
+    IsDownloader,
 }
 
 impl std::fmt::Display for ClientError {
@@ -423,10 +461,27 @@ async fn tcp_write<W: AsyncWriteExt + Writable + std::marker::Unpin>(
         packet.set_data(new_data);
     }
 
+    tcp_write_raw(w, packet).await?;
+
+    Ok(())
+}
+
+async fn tcp_write_raw<W: AsyncWriteExt + Writable + std::marker::Unpin>(
+    w: &mut W,
+    mut packet: Packet,
+) -> anyhow::Result<()> {
     let mut raw_data: Vec<u8> = packet.get_header().to_le_bytes().to_vec();
     raw_data.extend_from_slice(packet.get_data());
-
     w.writable().await?;
     w.write(&raw_data).await?;
+    Ok(())
+}
+
+async fn tcp_send_file<W: AsyncWriteExt + Writable + std::marker::Unpin>(
+    w: &mut W,
+    file_name: String,
+) -> anyhow::Result<()> {
+    debug!("Sending file '{}'", file_name);
+    tcp_write(w, Packet::Raw(RawPacket::from_str("KYou have not downloaded the mod manually!"))).await?;
     Ok(())
 }

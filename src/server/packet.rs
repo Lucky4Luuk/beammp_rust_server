@@ -99,20 +99,20 @@ impl std::fmt::Debug for RawPacket {
     }
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct RespawnPacketData {
     pub pos: RespawnPacketDataPos,
     pub rot: RespawnPacketDataRot,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct RespawnPacketDataPos {
     pub x: f64,
     pub y: f64,
     pub z: f64,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct RespawnPacketDataRot {
     pub x: f64,
     pub y: f64,

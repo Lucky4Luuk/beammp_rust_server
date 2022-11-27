@@ -597,22 +597,18 @@ impl Server {
                     for client in &self.clients {
                         for (id, car) in &client.cars {
                             let spawn = self.track_spawns_pit.as_ref().expect("Map did not have pit lane spawns set up!").get_client_spawn(i);
-                            if let Ok(json) = serde_json::to_string(&RespawnPacketData {
-                                pos: RespawnPacketDataPos {
-                                    x: spawn.pos[0],
-                                    y: spawn.pos[1],
-                                    z: spawn.pos[2],
-                                },
-                                rot: RespawnPacketDataRot {
-                                    x: spawn.rot[0],
-                                    y: spawn.rot[1],
-                                    z: spawn.rot[2],
-                                    w: spawn.rot[3]
-                                },
-                            }) {
-                                let packet_data = format!("Or:{}-{}:{}", client.id, id, json);
-                                self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
-                            }
+                            let data = format!(
+                                "{};{};{}#{};{};{};{}",
+                                spawn.pos[0],
+                                spawn.pos[1],
+                                spawn.pos[2],
+
+                                spawn.rot[0],
+                                spawn.rot[1],
+                                spawn.rot[2],
+                                spawn.rot[3],
+                            );
+                            client.trigger_client_event("Respawn", data).await;
                             i += 1;
                         }
                     }
@@ -690,22 +686,18 @@ impl Server {
                             debug!("deltaxy: {:?}", deltaxy);
                             debug!("deltaz: {}", deltaz);
                             if deltaxy > 0.8 || deltaz > 1.0 {
-                                if let Ok(json) = serde_json::to_string(&RespawnPacketData {
-                                    pos: RespawnPacketDataPos {
-                                        x: grid_spot.pos[0],
-                                        y: grid_spot.pos[1],
-                                        z: grid_spot.pos[2],
-                                    },
-                                    rot: RespawnPacketDataRot {
-                                        x: grid_spot.rot[0],
-                                        y: grid_spot.rot[1],
-                                        z: grid_spot.rot[2],
-                                        w: grid_spot.rot[3]
-                                    },
-                                }) {
-                                    let packet_data = format!("Or:{}-{}:{}", client.id, id, json);
-                                    self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None);
-                                }
+                                let data = format!(
+                                    "{};{};{}#{};{};{};{}",
+                                    grid_spot.pos[0],
+                                    grid_spot.pos[1],
+                                    grid_spot.pos[2],
+
+                                    grid_spot.rot[0],
+                                    grid_spot.rot[1],
+                                    grid_spot.rot[2],
+                                    grid_spot.rot[3],
+                                );
+                                client.trigger_client_event("Respawn", data).await;
                             }
                         }
                     }
@@ -719,7 +711,7 @@ impl Server {
                     // Kick all clients who are not ready
                     for i in 0..self.clients.len() {
                         if !self.clients[i].ready {
-                            self.clients[i].kick("Not ready in time!");
+                            self.clients[i].kick("Not ready in time!").await;
                         }
                     }
                     self.set_server_state(ServerState::Countdown);
@@ -727,6 +719,7 @@ impl Server {
                 }
             }
             ServerState::Countdown => {
+                // TODO: Prevent jumping the start
                 if self.generic_timer0.elapsed().as_millis() > 1000 && self.countdown > 0 {
                     self.countdown -= 1;
                     for client in &mut self.clients {
@@ -1125,6 +1118,8 @@ impl Server {
                     debug!("Respawning in pits!");
                     let client_id = packet.data[3] - 48;
                     let car_id = packet.data[5] - 48;
+                    let json = String::from_utf8_lossy(&packet.data[7..]).to_string();
+                    let data: RespawnPacketData = serde_json::from_str(&json)?;
                     for client in &mut self.clients {
                         if client.id == client_id {
                             for (id, car) in &mut client.cars {
@@ -1141,31 +1136,22 @@ impl Server {
                     }
                     debug!("client_id: {} / car_id: {}", client_id, car_id);
                     let spawn = self.track_spawns_pit.as_ref().expect("Map did not have pit lane spawns set up!").get_client_spawn(client_id);
-                    if let Ok(json) = serde_json::to_string(&RespawnPacketData {
-                        pos: RespawnPacketDataPos {
-                            x: spawn.pos[0],
-                            y: spawn.pos[1],
-                            z: spawn.pos[2],
-                        },
-                        rot: RespawnPacketDataRot {
-                            x: spawn.rot[0],
-                            y: spawn.rot[1],
-                            z: spawn.rot[2],
-                            w: spawn.rot[3]
-                        },
-                    }) {
-                        let packet_data = format!("Or:{}-{}:{}", client_id, car_id, json);
-                        if !packet_data.is_ascii() {
-                            trace!("{:?}", packet_data);
-                        }
-                        self.broadcast(Packet::Raw(RawPacket::from_str(&packet_data)), None).await;
-                    } else {
-                        // TODO: Handle this edge case better!
-                        self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
+                    if self.server_state != ServerState::LiningUp && self.server_state != ServerState::Countdown && crate::util::distance3d(spawn.pos, [data.pos.x, data.pos.y, data.pos.z]) > 1.0 {
+                        let data = format!(
+                            "{};{};{}#{};{};{};{}",
+                            spawn.pos[0],
+                            spawn.pos[1],
+                            spawn.pos[2],
+
+                            spawn.rot[0],
+                            spawn.rot[1],
+                            spawn.rot[2],
+                            spawn.rot[3],
+                        );
+                        self.clients[client_idx].trigger_client_event("Respawn", data).await;
                     }
-                } else {
-                    self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
                 }
+                self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id)).await;
             }
             't' => {
                 self.broadcast(Packet::Raw(packet), Some(self.clients[client_idx].id))
