@@ -15,7 +15,8 @@ map_checkpoints = ["west_coast_usa_cp0.json", "west_coast_usa_cp1.json", "west_c
 server_physics = false # Broken
 max_cars = 1
 max_laps = 5
-qual_time = 30
+qual_time = 210
+# qual_time = 10
 
 [event]
-expected_clients = ["luuk-bepis"] # , "LordJuvenile" , "Firerock"
+expected_clients = ["luuk-bepis", "Firerock", "willy_wanka2"] # , "LordJuvenile" , "Firerock"

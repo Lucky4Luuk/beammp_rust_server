@@ -29,7 +29,7 @@ pub use overlay::*;
 
 pub use crate::config::Config;
 
-#[derive(PartialEq, IntoPrimitive, Copy, Clone)]
+#[derive(PartialEq, IntoPrimitive, Copy, Clone, Debug)]
 #[repr(u8)]
 enum ServerState {
     Unknown = 0,
@@ -258,6 +258,7 @@ impl Server {
     }
 
     pub fn set_server_state(&mut self, state: ServerState) {
+        debug!("new state: {:?}", state);
         self.server_state = state;
         self.server_state_start = Instant::now();
     }
@@ -303,8 +304,10 @@ impl Server {
         }
         if self.unconnected_overlays.len() > 0 {
             for j in 0..self.clients.len() {
-                if self.clients.get(j).ok_or(ServerError::ClientDoesntExist)?.info.as_ref().unwrap().username == self.unconnected_overlays[0].0 {
-                    self.clients[j].overlay = Some(self.unconnected_overlays.swap_remove(0).1);
+                if let Some(overlay) = self.unconnected_overlays.get(0) {
+                    if self.clients.get(j).ok_or(ServerError::ClientDoesntExist)?.info.as_ref().unwrap().username == overlay.0 {
+                        self.clients[j].overlay = Some(self.unconnected_overlays.swap_remove(0).1);
+                    }
                 }
             }
         }
@@ -633,6 +636,12 @@ impl Server {
                         }
                         lap_id.push((i, fastest_lap));
                     }
+                    lap_id.sort_unstable_by(|(ida, timea), (idb, timeb)| timea.cmp(timeb));
+                    let mut j = 1;
+                    for (i, _) in &lap_id {
+                        self.clients[*i].grid_spot = j;
+                        j += 1;
+                    }
 
                     // Reset client lap counters and such
                     for client in &mut self.clients {
@@ -650,6 +659,7 @@ impl Server {
                     self.set_server_state(ServerState::LiningUp);
                     self.allow_respawns = false;
                     self.allow_spawns = false;
+                    self.force_respawn_pits = false;
                     self.generic_timer0 = Instant::now();
 
                     for client in &mut self.clients {
@@ -667,25 +677,26 @@ impl Server {
                         }
 
                         // Check client delta to their grid spot
-                        // TODO: Get grid spot based on grid order
+                        let gs = client.grid_spot;
                         let grid_spot;
-                        if i % 2 == 0 {
+                        if gs % 2 == 0 {
                             // Even
-                            let grid_spot_id = i / 2;
-                            grid_spot = self.track_spawns_even.as_ref().expect("Map does not have spawns set up!").get_client_spawn(grid_spot_id as u8);
-                        } else if i % 2 == 1 {
+                            let grid_spot_id = gs / 2;
+                            grid_spot = self.track_spawns_even.as_ref().expect("Map does not have spawns set up!").get_client_spawn(grid_spot_id as u8 - 1);
+                        } else if gs % 2 == 1 {
                             // Odd
-                            let grid_spot_id = i / 2 -1;
+                            let grid_spot_id = gs / 2;
                             grid_spot = self.track_spawns_odd.as_ref().expect("Map does not have spawns set up!").get_client_spawn(grid_spot_id as u8);
                         } else {
                             unreachable!();
                         }
+                        // let grid_spot = self.track_spawns_odd.as_ref().expect("Map does not have spawns set up!").get_client_spawn(gs as u8 - 1);
                         if let Some((id, car)) = client.cars.get(0) {
                             let deltaxy = crate::util::distance([grid_spot.pos[0] as f32, grid_spot.pos[1] as f32], [car.pos.x as f32, car.pos.y as f32]);
                             let deltaz = (grid_spot.pos[2] - car.pos.z).abs();
                             debug!("deltaxy: {:?}", deltaxy);
                             debug!("deltaz: {}", deltaz);
-                            if deltaxy > 0.8 || deltaz > 1.0 {
+                            if deltaxy > 1.0 || deltaz > 3.0 {
                                 let data = format!(
                                     "{};{};{}#{};{};{};{}",
                                     grid_spot.pos[0],
@@ -728,7 +739,8 @@ impl Server {
                         }
                     }
                     if self.countdown == 0 {
-                        self.server_state = ServerState::Race;
+                        self.set_server_state(ServerState::Race);
+                        self.force_respawn_pits = true;
                     }
                     self.generic_timer0 = Instant::now();
                 }

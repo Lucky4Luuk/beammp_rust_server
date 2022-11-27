@@ -57,6 +57,7 @@ pub struct Client {
     pub overlay: Option<Overlay>,
 
     pub ready: bool,
+    pub grid_spot: usize,
 }
 
 impl Drop for Client {
@@ -105,6 +106,7 @@ impl Client {
             overlay: None,
 
             ready: false,
+            grid_spot: 0,
         }
     }
 
