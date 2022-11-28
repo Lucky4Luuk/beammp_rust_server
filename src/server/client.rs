@@ -247,6 +247,14 @@ impl Client {
         Ok(None)
     }
 
+    pub fn get_progress(&self) -> f32 {
+        if let Some((_, car)) = self.cars.get(0) {
+            (car.laps * 100) as f32 + (car.current_checkpoint * 10) as f32 + car.last_progress
+        } else {
+            f32::MAX
+        }
+    }
+
     pub async fn update_overlay(&mut self) {
         if let Some(overlay) = &mut self.overlay {
             if let Some((_, car)) = self.cars.get_mut(0) {

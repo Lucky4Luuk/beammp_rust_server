@@ -380,7 +380,7 @@ impl Server {
         for client in &mut self.clients {
             client.update_overlay().await;
 
-            if self.overlay_update_time.elapsed().as_secs() > 1 {
+            if self.overlay_update_time.elapsed().as_millis() > 100 {
                 let max_laps = if self.server_state == ServerState::Race { self.config.game.max_laps.unwrap_or(0) } else { 0 };
                 if let Some(overlay) = &mut client.overlay {
                     overlay.set_max_laps(max_laps).await;
@@ -423,27 +423,30 @@ impl Server {
             }
 
             // Track path
-            if let Some(client) = &mut self.clients.get_mut(self.track_limits_client as usize) {
-                for (_, car) in &mut client.cars {
-                    let active_cp = if car.next_checkpoint == 0 {
-                        self.track_checkpoints.len() - 1
-                    } else {
-                        car.next_checkpoint - 1
-                    };
-                    if let Some(path) = &self.track_checkpoints.get(active_cp) {
-                        let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
-                        let car_angle = unit_quat.euler_angles().2 / std::f64::consts::PI * 180.0;
-                        let car_forward = car.vel.xy().normalize();
-                        let car_vel_angle = -(car_forward.y.atan2(car_forward.x) as f32 / std::f32::consts::PI * 180.0) + 90.0;
-                        let track_angle = -path.get_angle_at_pos([car.pos.x as f32, car.pos.y as f32]) + 90.0;
-                        let angle_diff = (car_angle as f32 - track_angle).abs() % 360.0;
-                        car.latest_angle_to_track = angle_diff;
-                        let angle_vel_diff = (180.0 - ((car_vel_angle as f32 - track_angle).abs() % 360.0)).max(0.0);
-                        car.latest_vel_angle_to_track = angle_vel_diff;
-                        // debug!("angle diff: {}", angle_diff);
-                        // debug!("angle vel diff: {}", angle_vel_diff);
-                        let progress = path.get_percentage_along_track([car.pos.x as f32, car.pos.y as f32]);
-                        // debug!("progress: {}", progress);
+            if self.server_state == ServerState::Qualifying || self.server_state == ServerState::Race {
+                if let Some(client) = &mut self.clients.get_mut(self.track_limits_client as usize) {
+                    for (_, car) in &mut client.cars {
+                        let active_cp = if car.next_checkpoint == 0 {
+                            self.track_checkpoints.len() - 1
+                        } else {
+                            car.next_checkpoint - 1
+                        };
+                        if let Some(path) = &self.track_checkpoints.get(active_cp) {
+                            let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
+                            let car_angle = unit_quat.euler_angles().2 / std::f64::consts::PI * 180.0;
+                            let car_forward = car.vel.xy().normalize();
+                            let car_vel_angle = -(car_forward.y.atan2(car_forward.x) as f32 / std::f32::consts::PI * 180.0) + 90.0;
+                            let track_angle = -path.get_angle_at_pos([car.pos.x as f32, car.pos.y as f32]) + 90.0;
+                            let angle_diff = (car_angle as f32 - track_angle).abs() % 360.0;
+                            car.latest_angle_to_track = angle_diff;
+                            let angle_vel_diff = (180.0 - ((car_vel_angle as f32 - track_angle).abs() % 360.0)).max(0.0);
+                            car.latest_vel_angle_to_track = angle_vel_diff;
+                            // debug!("angle diff: {}", angle_diff);
+                            // debug!("angle vel diff: {}", angle_vel_diff);
+                            let progress = path.get_percentage_along_track([car.pos.x as f32, car.pos.y as f32]);
+                            // debug!("progress: {}", progress);
+                            car.last_progress = progress;
+                        }
                     }
                 }
             }
@@ -455,6 +458,7 @@ impl Server {
                         if cp.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
                             if !car.intersects_cp {
                                 if car.next_checkpoint == 0 {
+                                    car.active_checkpoint = self.track_checkpoints.len() - 1;
                                     // Start/finish checkpoint
                                     if car.latest_vel_angle_to_track > 135.0 {
                                         car.laps -= 1;
@@ -582,16 +586,12 @@ impl Server {
             }
             ServerState::WaitingForSpawns => {
                 let mut has_spawned = 0;
-                let mut all_ready = true;
                 for client in &self.clients {
                     if client.cars.len() > 0 {
                         has_spawned += 1;
                     }
-                    if !client.ready {
-                        all_ready = false;
-                    }
                 }
-                if has_spawned == self.clients.len() && all_ready {
+                if has_spawned == self.clients.len() {
                     info!("All clients have spawned a car!");
                     self.set_server_state(ServerState::Qualifying);
                     self.allow_spawns = false;
@@ -653,8 +653,6 @@ impl Server {
                             car.offtrack_start = None;
                         }
                     }
-
-                    // TODO: Store client ids in grid order
 
                     self.set_server_state(ServerState::LiningUp);
                     self.allow_respawns = false;
@@ -723,6 +721,10 @@ impl Server {
                     for i in 0..self.clients.len() {
                         if !self.clients[i].ready {
                             self.clients[i].kick("Not ready in time!").await;
+                        } else {
+                            if let Some(overlay) = &mut self.clients[i].overlay {
+                                overlay.set_state(&ServerState::Countdown);
+                            }
                         }
                     }
                     self.set_server_state(ServerState::Countdown);
@@ -746,7 +748,25 @@ impl Server {
                 }
             }
             ServerState::Race => {
-
+                if self.generic_timer0.elapsed().as_millis() > 50 {
+                    self.generic_timer0 = Instant::now();
+                    let mut order = Vec::new();
+                    for (i, client) in self.clients.iter().enumerate() {
+                        let progress = client.get_progress();
+                        order.push((i, progress));
+                    }
+                    order.sort_unstable_by(|(ia, pa), (ib, pb)| pb.partial_cmp(pa).unwrap());
+                    let player_count = order.len();
+                    let mut j = 1;
+                    for (i, _) in &order {
+                        if let Some(client) = self.clients.get_mut(*i) {
+                            if let Some(overlay) = &mut client.overlay {
+                                overlay.set_position(j, player_count).await;
+                            }
+                        }
+                        j += 1;
+                    }
+                }
             }
             _ => todo!()
         }

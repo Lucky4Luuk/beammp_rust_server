@@ -89,6 +89,18 @@ impl Overlay {
         let _ = self.socket.writable().await;
         self.write(&data).await;
     }
+
+    pub async fn set_position(&mut self, position: usize, max_position: usize) {
+        let data = format!("A{}", position);
+        let data = data.as_bytes();
+        let _ = self.socket.writable().await;
+        self.write(&data).await;
+
+        let data = format!("B{}", max_position);
+        let data = data.as_bytes();
+        let _ = self.socket.writable().await;
+        self.write(&data).await;
+    }
 }
 
 #[derive(Debug)]

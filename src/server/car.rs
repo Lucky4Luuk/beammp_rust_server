@@ -31,6 +31,8 @@ pub struct Car {
     pub lap_times: Vec<Duration>,
 
     pub next_checkpoint: usize,
+    pub active_checkpoint: usize,
+    pub last_progress: f32,
 }
 
 impl Car {
@@ -54,6 +56,8 @@ impl Car {
             lap_times: Vec::new(),
 
             next_checkpoint: 0,
+            active_checkpoint: 0,
+            last_progress: 0.0,
 
             ..Default::default()
         }
