@@ -428,8 +428,8 @@ impl Server {
                                 // let dt = 1.0 / 5.0;
                                 let dt = 1.0;
                                 for i in 0..3 {
-                                    vel[i] = (vel[i] * dt).max(1.0).min(-1.0);
-                                    angvel[i] = (angvel[i] * dt).max(1.0).min(-1.0);
+                                    vel[i] = vel[i].max(1.0).min(-1.0) * dt;
+                                    angvel[i] = angvel[i].max(1.0).min(-1.0) * dt;
                                 }
                                 let data = format!("{};{};{}#{};{};{}", vel[0], vel[1], vel[2], angvel[0], angvel[1], angvel[2]);
                                 client.trigger_client_event("SetVelocity", data).await;
