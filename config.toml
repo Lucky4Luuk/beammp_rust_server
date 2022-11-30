@@ -12,11 +12,11 @@ map_spawns_pit = "west_coast_usa_spawns_pit.json"
 map_spawns_odd = "west_coast_usa_spawns_odd.json"
 map_spawns_even = "west_coast_usa_spawns_even.json"
 map_checkpoints = ["west_coast_usa_cp0.json", "west_coast_usa_cp1.json", "west_coast_usa_cp2.json"]
-server_physics = false # Broken
+server_physics = false # Not yet implemented
 max_cars = 1
 max_laps = 5
-# qual_time = 210
-qual_time = 10
+qual_time = 2100
+# qual_time = 10
 
 [event]
-expected_clients = ["luuk-bepis", "willy_wanka2", "LordJuvenile", "The_Racc"] # , "LordJuvenile" , "Firerock", "willy_wanka2"
+expected_clients = ["luuk-bepis"] #, "willy_wanka2", "LordJuvenile", "The_Racc"] # , "LordJuvenile" , "Firerock", "willy_wanka2"

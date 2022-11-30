@@ -81,6 +81,7 @@ pub struct Server {
 
     overlay_update_time: Instant,
     generic_timer0: Instant,
+    finish_order: Vec<usize>,
 }
 
 impl Server {
@@ -254,6 +255,7 @@ impl Server {
 
             overlay_update_time: Instant::now(),
             generic_timer0: Instant::now(),
+            finish_order: Vec::new(),
         })
     }
 
@@ -402,18 +404,21 @@ impl Server {
                     if let Some(limits) = &self.track_limits {
                         if limits.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
                             if let Some(start) = car.offtrack_start {
-                                debug!("Client went {} seconds offtrack!", start.elapsed().as_secs_f32());
+                                let offtrack_time = start.elapsed().as_secs_f32();
+                                debug!("Client went {} seconds offtrack!", offtrack_time);
+                                client.incidents += 1;
+                                // TODO: Time penalty if velocity stays high?
                             }
                             car.offtrack_start = None;
                         } else {
-                            if car.offtrack_start.is_none() {
+                            let mut intersects_pit = false;
+                            if let Some(limits) = &self.track_limits_pit {
+                                intersects_pit = limits.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half);
+                            }
+                            if car.offtrack_start.is_none() && intersects_pit {
                                 car.offtrack_start = Some(Instant::now());
                             }
                         }
-                    }
-
-                    if let Some(limits) = &self.track_limits_pit {
-                        limits.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half);
                     }
 
                     // if let Some(limits) = &self.track_limits_pit_exit {
@@ -432,20 +437,26 @@ impl Server {
                             car.next_checkpoint - 1
                         };
                         if let Some(path) = &self.track_checkpoints.get(active_cp) {
-                            let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
-                            let car_angle = unit_quat.euler_angles().2 / std::f64::consts::PI * 180.0;
-                            let car_forward = car.vel.xy().normalize();
-                            let car_vel_angle = -(car_forward.y.atan2(car_forward.x) as f32 / std::f32::consts::PI * 180.0) + 90.0;
-                            let track_angle = -path.get_angle_at_pos([car.pos.x as f32, car.pos.y as f32]) + 90.0;
-                            let angle_diff = (car_angle as f32 - track_angle).abs() % 360.0;
-                            car.latest_angle_to_track = angle_diff;
-                            let angle_vel_diff = (180.0 - ((car_vel_angle as f32 - track_angle).abs() % 360.0)).max(0.0);
-                            car.latest_vel_angle_to_track = angle_vel_diff;
+                            // let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
+                            // let car_angle = unit_quat.euler_angles().2 / std::f64::consts::PI * 180.0;
+                            // let car_forward = car.vel.xy().normalize();
+                            // let car_vel_angle = car_forward.y.atan2(car_forward.x) as f32 / std::f32::consts::PI * 180.0;
+                            // let track_angle = path.get_angle_at_pos([car.pos.x as f32, car.pos.y as f32]);
+                            // let angle_diff = (car_angle as f32 - track_angle).abs() % 360.0;
+                            // car.latest_angle_to_track = angle_diff;
+                            // let angle_vel_diff = car_vel_angle as f32 - track_angle;
+                            // car.latest_vel_angle_to_track = angle_vel_diff;
+                            // debug!("track angle: {}", track_angle);
+                            // debug!("car angle: {}", car_angle);
+                            // debug!("car vel angle: {}", car_vel_angle);
                             // debug!("angle diff: {}", angle_diff);
                             // debug!("angle vel diff: {}", angle_vel_diff);
                             let progress = path.get_percentage_along_track([car.pos.x as f32, car.pos.y as f32]);
-                            // debug!("progress: {}", progress);
                             car.last_progress = progress;
+                            // debug!("progress: {}", progress);
+
+                            let car_rot_vel = car.rvel.z;
+                            debug!("car rot vel z {}", car_rot_vel);
                         }
                     }
                 }
@@ -474,6 +485,7 @@ impl Server {
                                     }
                                 } else {
                                     // Not the last checkpoint
+                                    car.active_checkpoint = car.next_checkpoint;
                                     car.next_checkpoint += 1;
                                     if car.next_checkpoint == self.track_checkpoints.len() {
                                         car.next_checkpoint = 0;
@@ -766,6 +778,29 @@ impl Server {
                         }
                         j += 1;
                     }
+                }
+
+                let mut all_finished = true;
+                for i in 0..self.clients.len() {
+                    let client = self.clients.get(i);
+                    if client.is_none() { continue; }
+                    drop(client);
+                    if self.clients[i].cars[0].1.laps > self.config.game.max_laps.unwrap_or(5) && self.clients[i].finished == false {
+                        self.clients[i].finished = true;
+                        self.finish_order.push(i);
+                    }
+                    if !self.clients[i].finished {
+                        all_finished = false;
+                    }
+                }
+                if all_finished {
+                    self.set_server_state(ServerState::Finish);
+                    self.generic_timer0 = Instant::now();
+                }
+            }
+            ServerState::Finish => {
+                if self.generic_timer0.elapsed().as_secs() > 30 {
+                    std::process::exit(0);
                 }
             }
             _ => todo!()
