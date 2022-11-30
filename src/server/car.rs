@@ -13,9 +13,6 @@ pub struct Car {
     pub tim: f64,
     pub ping: f64,
 
-    pub needs_packet: bool,
-    pub is_corrected: bool,
-
     pub offtrack_start: Option<Instant>,
     pub in_pits: bool,
     pub intersects_cp: bool,
@@ -39,7 +36,6 @@ impl Car {
     pub fn new(car_json: String) -> Self {
         Self {
             car_json: car_json,
-            is_corrected: false,
 
             offtrack_start: None,
             in_pits: false,

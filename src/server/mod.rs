@@ -17,6 +17,7 @@ mod track_limits;
 mod spawns;
 mod track_path;
 mod overlay;
+mod physics;
 
 pub use backend::*;
 pub use car::*;
@@ -26,6 +27,7 @@ pub use track_limits::*;
 pub use spawns::*;
 pub use track_path::*;
 pub use overlay::*;
+pub use physics::*;
 
 pub use crate::config::Config;
 
@@ -80,6 +82,7 @@ pub struct Server {
     allow_respawns: bool,
 
     overlay_update_time: Instant,
+    physics_timer: Instant,
     generic_timer0: Instant,
     finish_order: Vec<usize>,
 }
@@ -254,6 +257,7 @@ impl Server {
             allow_respawns: true,
 
             overlay_update_time: Instant::now(),
+            physics_timer: Instant::now(),
             generic_timer0: Instant::now(),
             finish_order: Vec::new(),
         })
@@ -393,8 +397,49 @@ impl Server {
         }
 
         // Physics
-        if self.config.game.server_physics {
-            todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
+        if self.server_state == ServerState::Qualifying || self.server_state == ServerState::Race {
+            if self.config.game.server_physics && self.physics_timer.elapsed().as_millis() > 100 {
+                // todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
+                // if let Some(client) = &mut self.clients.get_mut(0) {
+                    // client.trigger_client_event("SetVelocity", "1;1;1#2;2;2").await;
+                // }
+                let mut clients = Vec::new();
+                for client in &self.clients {
+                    if let Some((_, car)) = client.cars.get(0) {
+                        let pos: [f64; 3] = car.pos.into();
+                        let pos = [pos[0] as f32, pos[1] as f32, pos[2] as f32];
+                        let vel: [f64; 3] = car.vel.into();
+                        let vel = [vel[0] as f32, vel[1] as f32, vel[2] as f32];
+                        let angvel: [f64; 3] = car.rvel.into();
+                        let angvel = [angvel[0] as f32, angvel[1] as f32, angvel[2] as f32];
+                        let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
+                        let rot = unit_quat.euler_angles();
+                        let rot = [rot.0 as f32, rot.1 as f32, rot.2 as f32];
+                        let hbox = [1.0, 1.0, 1.0];
+                        clients.push((client.id, pos, vel, angvel, rot, hbox, false));
+                    }
+                }
+                check_physics(&mut clients);
+                for (id, pos, vel, angvel, rot, hbox, has_hit) in &mut clients {
+                    if *has_hit {
+                        'l: for client in &self.clients {
+                            if client.id == *id {
+                                // let dt = 0.1;
+                                // let dt = 1.0 / 5.0;
+                                let dt = 1.0;
+                                for i in 0..3 {
+                                    vel[i] = (vel[i] * dt).max(1.0).min(-1.0);
+                                    angvel[i] = (angvel[i] * dt).max(1.0).min(-1.0);
+                                }
+                                let data = format!("{};{};{}#{};{};{}", vel[0], vel[1], vel[2], angvel[0], angvel[1], angvel[2]);
+                                client.trigger_client_event("SetVelocity", data).await;
+                                break 'l;
+                            }
+                        }
+                    }
+                }
+                self.physics_timer = Instant::now();
+            }
         }
 
         if self.server_state == ServerState::Qualifying || self.server_state == ServerState::Race {
@@ -456,7 +501,7 @@ impl Server {
                             // debug!("progress: {}", progress);
 
                             let car_rot_vel = car.rvel.z;
-                            debug!("car rot vel z {}", car_rot_vel);
+                            // debug!("car rot vel z {}", car_rot_vel);
                         }
                     }
                 }
@@ -504,35 +549,35 @@ impl Server {
         }
 
         // Send position packets
-        let _ = self.udp_socket.writable().await;
-        for i in 0..self.clients.len() {
-            for k in 0..self.clients[i].cars.len() {
-                if self.clients[i].cars[k].1.needs_packet {
-                    self.clients[i].cars[k].1.needs_packet = false;
-                    let pos_data = TransformPacket {
-                        rvel: self.clients[i].cars[k].1.rvel.into(),
-                        tim: self.clients[i].cars[k].1.tim,
-                        pos: self.clients[i].cars[k].1.pos.into(),
-                        ping: self.clients[i].cars[k].1.ping,
-                        rot: self.clients[i].cars[k].1.rot.coords.into(),
-                        vel: self.clients[i].cars[k].1.vel.into(),
-                    };
-                    if let Ok(json) = serde_json::to_string(&pos_data) {
-                        let data = format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json);
-                        if self.clients[i].cars[k].1.is_corrected {
-                            todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
-                            self.clients[i].cars[k].1.is_corrected = false;
-                            if let Some(udp_addr) = self.clients[i].udp_addr {
-                                // TODO: This breaks all force feedback for a car
-                                self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_str(&format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json)))).await;
-                            }
-                        }
-                        let p = Packet::Raw(RawPacket::from_str(&data));
-                        self.broadcast(p, Some(self.clients[i].id)).await;
-                    }
-                }
-            }
-        }
+        // let _ = self.udp_socket.writable().await;
+        // for i in 0..self.clients.len() {
+        //     for k in 0..self.clients[i].cars.len() {
+        //         if self.clients[i].cars[k].1.needs_packet {
+        //             self.clients[i].cars[k].1.needs_packet = false;
+        //             let pos_data = TransformPacket {
+        //                 rvel: self.clients[i].cars[k].1.rvel.into(),
+        //                 tim: self.clients[i].cars[k].1.tim,
+        //                 pos: self.clients[i].cars[k].1.pos.into(),
+        //                 ping: self.clients[i].cars[k].1.ping,
+        //                 rot: self.clients[i].cars[k].1.rot.coords.into(),
+        //                 vel: self.clients[i].cars[k].1.vel.into(),
+        //             };
+        //             if let Ok(json) = serde_json::to_string(&pos_data) {
+        //                 let data = format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json);
+        //                 if self.clients[i].cars[k].1.is_corrected {
+        //                     todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
+        //                     self.clients[i].cars[k].1.is_corrected = false;
+        //                     if let Some(udp_addr) = self.clients[i].udp_addr {
+        //                         // TODO: This breaks all force feedback for a car
+        //                         self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_str(&format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json)))).await;
+        //                     }
+        //                 }
+        //                 let p = Packet::Raw(RawPacket::from_str(&data));
+        //                 self.broadcast(p, Some(self.clients[i].id)).await;
+        //             }
+        //         }
+        //     }
+        // }
 
         // Check if clients are allowed to be on the server
         let required_clients = self.config.event.expected_clients.as_ref().unwrap();
@@ -735,7 +780,7 @@ impl Server {
                             self.clients[i].kick("Not ready in time!").await;
                         } else {
                             if let Some(overlay) = &mut self.clients[i].overlay {
-                                overlay.set_state(&ServerState::Countdown);
+                                overlay.set_state(&ServerState::Countdown).await;
                             }
                         }
                     }
@@ -967,7 +1012,10 @@ impl Server {
                                     car.rvel = pos_data.rvel.into();
                                     car.tim = pos_data.tim;
                                     car.ping = pos_data.ping;
-                                    car.needs_packet = true;
+                                } else {
+                                    if let Some(udp_addr) = self.clients[i].udp_addr {
+                                        self.send_udp(udp_addr, &p).await;
+                                    }
                                 }
                             }
                         }
