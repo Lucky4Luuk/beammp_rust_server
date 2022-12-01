@@ -19,4 +19,4 @@ qual_time = 2100
 # qual_time = 10
 
 [event]
-expected_clients = ["luuk-bepis", "Makuta"] #, "willy_wanka2", "LordJuvenile", "The_Racc"] # , "LordJuvenile" , "Firerock", "willy_wanka2"
+expected_clients = ["luuk-bepis", "Firerock"] #, "willy_wanka2", "LordJuvenile", "The_Racc"] # , "LordJuvenile" , "Firerock", "willy_wanka2"

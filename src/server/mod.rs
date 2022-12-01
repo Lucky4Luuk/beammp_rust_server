@@ -424,15 +424,16 @@ impl Server {
                     if *has_hit {
                         'l: for client in &self.clients {
                             if client.id == *id {
-                                // let dt = 0.1;
-                                // let dt = 1.0 / 5.0;
-                                let dt = 1.0;
-                                for i in 0..3 {
-                                    vel[i] = vel[i].max(1.0).min(-1.0) * dt;
-                                    angvel[i] = angvel[i].max(1.0).min(-1.0) * dt;
+                                if let Some((_, car)) = client.cars.get(0) {
+                                    let og_vel: [f64; 3] = car.vel.into();
+                                    let og_angvel: [f64; 3] = car.rvel.into();
+                                    for i in 0..3 {
+                                        vel[i] = vel[i];
+                                        angvel[i] = -angvel[i];
+                                    }
+                                    let data = format!("{};{};{}#{};{};{}", vel[0], vel[1], vel[2], angvel[0], angvel[1], angvel[2]);
+                                    client.trigger_client_event("SetVelocity", data).await;
                                 }
-                                let data = format!("{};{};{}#{};{};{}", vel[0], vel[1], vel[2], angvel[0], angvel[1], angvel[2]);
-                                client.trigger_client_event("SetVelocity", data).await;
                                 break 'l;
                             }
                         }
