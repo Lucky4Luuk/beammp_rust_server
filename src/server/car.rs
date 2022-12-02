@@ -17,7 +17,7 @@ pub struct Car {
     pub in_pits: bool,
     pub intersects_cp: bool,
 
-    pub hitbox_half: [f32; 2],
+    pub hitbox_half: [f32; 3],
 
     pub latest_angle_to_track: f32,
     pub latest_vel_angle_to_track: f32,
@@ -41,7 +41,7 @@ impl Car {
             in_pits: false,
             intersects_cp: false,
 
-            hitbox_half: [1.0, 1.0],
+            hitbox_half: [1.0, 1.0, 1.0],
 
             latest_angle_to_track: 0.0,
             latest_vel_angle_to_track: 0.0,

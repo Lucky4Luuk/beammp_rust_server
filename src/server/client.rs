@@ -208,7 +208,7 @@ impl Client {
                     'S' if packet.data.len() > 1 => match packet.data[1] as char {
                         'R' => {
                             // let file_packet = RawPacket::from_code('-');
-                            let file_data = "/bepis_dysoon_uu201.zip;/simraceclubclient.zip;51981039;1815;";
+                            let file_data = "/bepis_dysoon_uu201_v3.zip;/bepis_laudi_v8_revolution.zip;/simraceclubclient.zip;48353220;50283849;1937;";
                             let file_packet = RawPacket::from_str(file_data);
                             self.write_packet(Packet::Raw(file_packet))
                                 .await?

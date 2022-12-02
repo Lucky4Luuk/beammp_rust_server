@@ -415,8 +415,7 @@ impl Server {
                         let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
                         let rot = unit_quat.euler_angles();
                         let rot = [rot.0 as f32, rot.1 as f32, rot.2 as f32];
-                        let hbox = [1.0, 1.0, 1.0];
-                        clients.push((client.id, pos, vel, angvel, rot, hbox, false));
+                        clients.push((client.id, pos, vel, angvel, rot, car.hitbox_half, false));
                     }
                 }
                 check_physics(&mut clients);
@@ -447,8 +446,9 @@ impl Server {
             // Track limits
             if let Some(client) = &mut self.clients.get_mut(self.track_limits_client as usize) {
                 for (_, car) in &mut client.cars {
+                    let size = [1.0, 1.0];
                     if let Some(limits) = &self.track_limits {
-                        if limits.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
+                        if limits.check_limits([car.pos.x as f32, car.pos.y as f32], size) {
                             if let Some(start) = car.offtrack_start {
                                 let offtrack_time = start.elapsed().as_secs_f32();
                                 debug!("Client went {} seconds offtrack!", offtrack_time);
@@ -459,7 +459,7 @@ impl Server {
                         } else {
                             let mut intersects_pit = false;
                             if let Some(limits) = &self.track_limits_pit {
-                                intersects_pit = limits.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half);
+                                intersects_pit = limits.check_limits([car.pos.x as f32, car.pos.y as f32], size);
                             }
                             if car.offtrack_start.is_none() && intersects_pit {
                                 car.offtrack_start = Some(Instant::now());
@@ -512,7 +512,7 @@ impl Server {
             for client in &mut self.clients {
                 for (_, car) in &mut client.cars {
                     if let Some(cp) = self.track_checkpoints.get(car.next_checkpoint) {
-                        if cp.check_limits([car.pos.x as f32, car.pos.y as f32], car.hitbox_half) {
+                        if cp.check_limits([car.pos.x as f32, car.pos.y as f32], [car.hitbox_half[0], car.hitbox_half[1]]) {
                             if !car.intersects_cp {
                                 if car.next_checkpoint == 0 {
                                     car.active_checkpoint = self.track_checkpoints.len() - 1;
@@ -548,37 +548,6 @@ impl Server {
                 }
             }
         }
-
-        // Send position packets
-        // let _ = self.udp_socket.writable().await;
-        // for i in 0..self.clients.len() {
-        //     for k in 0..self.clients[i].cars.len() {
-        //         if self.clients[i].cars[k].1.needs_packet {
-        //             self.clients[i].cars[k].1.needs_packet = false;
-        //             let pos_data = TransformPacket {
-        //                 rvel: self.clients[i].cars[k].1.rvel.into(),
-        //                 tim: self.clients[i].cars[k].1.tim,
-        //                 pos: self.clients[i].cars[k].1.pos.into(),
-        //                 ping: self.clients[i].cars[k].1.ping,
-        //                 rot: self.clients[i].cars[k].1.rot.coords.into(),
-        //                 vel: self.clients[i].cars[k].1.vel.into(),
-        //             };
-        //             if let Ok(json) = serde_json::to_string(&pos_data) {
-        //                 let data = format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json);
-        //                 if self.clients[i].cars[k].1.is_corrected {
-        //                     todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
-        //                     self.clients[i].cars[k].1.is_corrected = false;
-        //                     if let Some(udp_addr) = self.clients[i].udp_addr {
-        //                         // TODO: This breaks all force feedback for a car
-        //                         self.send_udp(udp_addr, &Packet::Raw(RawPacket::from_str(&format!("Zp:{}-{}:{}", self.clients[i].id, self.clients[i].cars[k].0, json)))).await;
-        //                     }
-        //                 }
-        //                 let p = Packet::Raw(RawPacket::from_str(&data));
-        //                 self.broadcast(p, Some(self.clients[i].id)).await;
-        //             }
-        //         }
-        //     }
-        // }
 
         // Check if clients are allowed to be on the server
         let required_clients = self.config.event.expected_clients.as_ref().unwrap();
@@ -1112,6 +1081,33 @@ impl Server {
                             self.broadcast(Packet::Raw(packet), None).await;
                         }
                     }
+                    'E' => {
+                        let packet_data = packet.data_as_string();
+                        let split = packet_data.split(":").collect::<Vec<&str>>();
+                        if let Some(event_name) = split.get(1) {
+                            match *event_name {
+                                "SetSize" => {
+                                    if let Some(data) = split.get(2) {
+                                        let data = data.split(";").collect::<Vec<&str>>();
+                                        let id = data.get(0).map(|id| id.parse::<u8>()).ok_or(ServerError::BrokenPacket)??;
+                                        let w = data.get(1).map(|w| w.parse::<f32>()).ok_or(ServerError::BrokenPacket)??;
+                                        let l = data.get(2).map(|h| h.parse::<f32>()).ok_or(ServerError::BrokenPacket)??;
+                                        let h = data.get(3).map(|l| l.parse::<f32>()).ok_or(ServerError::BrokenPacket)??;
+                                        debug!("hbox size: {:?}", [w, l, h]);
+                                        for client in &mut self.clients {
+                                            if client.id == id {
+                                                if let Some((_, car)) = client.cars.get_mut(0) {
+                                                    // car.hitbox_half = [w / 4.0, l / 4.0, 1.0];
+                                                    car.hitbox_half = [1.0, 2.0, 1.0];
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => error!("Unknown event! {:?}", packet),
+                            }
+                        }
+                    }
                     _ => {
                         let string_data = String::from_utf8_lossy(&packet.data[..]);
                         debug!(
@@ -1153,6 +1149,7 @@ impl Server {
                 let car_id = client.register_car(Car::new(car_json_str.to_string()));
                 let client_id = client.get_id();
                 if allowed {
+                    client.trigger_client_event("GetSize", client_id.to_string()).await;
                     let packet_data = format!(
                         "Os:{}:{}:{}-{}:{}",
                         client.get_roles(),
