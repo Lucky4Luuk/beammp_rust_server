@@ -12,6 +12,7 @@ pub struct Car {
     pub rvel: Vector3<f64>,
     pub tim: f64,
     pub ping: f64,
+    pub last_pos_update: Option<Instant>,
 
     pub offtrack_start: Option<Instant>,
     pub in_pits: bool,
@@ -62,5 +63,14 @@ impl Car {
     pub fn add_lap_time(&mut self, duration: Duration) {
         debug!("lap time: {}:{}.{}", (duration.as_secs_f32() / 60.0).floor(), (duration.as_secs_f32() % 60.0) as usize, duration.subsec_millis());
         self.lap_times.push(duration);
+    }
+
+    pub fn pos(&self) -> Vector3<f64> {
+        self.pos + self.vel * self.last_pos_update.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0)
+    }
+
+    pub fn rotation(&self) -> Quaternion<f64> {
+        let t = self.last_pos_update.map(|t| t.elapsed().as_secs_f64()).unwrap_or(0.0);
+        self.rot + UnitQuaternion::from_euler_angles(self.rvel.x * t, self.rvel.y * t, self.rvel.z * t).quaternion()
     }
 }

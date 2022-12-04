@@ -3,6 +3,7 @@ use std::net::SocketAddr;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{
@@ -61,6 +62,7 @@ pub struct Client {
     pub finished: bool,
 
     pub incidents: usize,
+    pub last_physics_update: Instant,
 }
 
 impl Drop for Client {
@@ -113,6 +115,7 @@ impl Client {
             finished: false,
 
             incidents: 0,
+            last_physics_update: Instant::now(),
         }
     }
 
@@ -368,21 +371,28 @@ impl Client {
             Err(e) => return Err(e.into()),
         }
 
-        let mut data = vec![0u8; u32::from_le_bytes(header) as usize];
-        let data_size;
-        match self.socket.try_read(&mut data) {
-            Ok(0) => {
-                error!("Socket is readable, yet has 0 bytes to read! Disconnecting client...");
-                self.disconnect();
-                return Ok(None);
+        let expected_size = u32::from_le_bytes(header) as usize;
+        let mut data = Vec::new();
+        let mut tmp_data = vec![0u8; expected_size];
+        let mut data_size = 0;
+        while data_size < expected_size {
+            match self.socket.try_read(&mut tmp_data) {
+                Ok(0) => {
+                    error!("Socket is readable, yet has 0 bytes to read! Disconnecting client...");
+                    self.disconnect();
+                    return Ok(None);
+                }
+                Ok(n) => {
+                    data_size += n;
+                    data.extend_from_slice(&tmp_data[..n]);
+                },
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // debug!("Packet appears to be ready, yet can't be read yet!");
+                    // self.socket.read(&mut data).await?;
+                    return Ok(None);
+                }
+                Err(e) => return Err(e.into()),
             }
-            Ok(n) => data_size = n,
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // debug!("Packet appears to be ready, yet can't be read yet!");
-                // self.socket.read(&mut data).await?;
-                return Ok(None);
-            }
-            Err(e) => return Err(e.into()),
         }
 
         Ok(Some(RawPacket {

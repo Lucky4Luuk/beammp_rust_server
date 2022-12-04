@@ -82,7 +82,6 @@ pub struct Server {
     allow_respawns: bool,
 
     overlay_update_time: Instant,
-    physics_timer: Instant,
     generic_timer0: Instant,
     finish_order: Vec<usize>,
 }
@@ -257,7 +256,6 @@ impl Server {
             allow_respawns: true,
 
             overlay_update_time: Instant::now(),
-            physics_timer: Instant::now(),
             generic_timer0: Instant::now(),
             finish_order: Vec::new(),
         })
@@ -398,7 +396,7 @@ impl Server {
 
         // Physics
         if self.server_state == ServerState::Qualifying || self.server_state == ServerState::Race {
-            if self.config.game.server_physics && self.physics_timer.elapsed().as_millis() > 100 {
+            if self.config.game.server_physics {
                 // todo!("Not yet implemented! Can't correct the players position and velocity without respawning right now, so this will have to wait for that!");
                 // if let Some(client) = &mut self.clients.get_mut(0) {
                     // client.trigger_client_event("SetVelocity", "1;1;1#2;2;2").await;
@@ -406,13 +404,13 @@ impl Server {
                 let mut clients = Vec::new();
                 for client in &self.clients {
                     if let Some((_, car)) = client.cars.get(0) {
-                        let pos: [f64; 3] = car.pos.into();
+                        let pos: [f64; 3] = car.pos().into();
                         let pos = [pos[0] as f32, pos[1] as f32, pos[2] as f32];
                         let vel: [f64; 3] = car.vel.into();
                         let vel = [vel[0] as f32, vel[1] as f32, vel[2] as f32];
                         let angvel: [f64; 3] = car.rvel.into();
                         let angvel = [angvel[0] as f32, angvel[1] as f32, angvel[2] as f32];
-                        let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rot);
+                        let unit_quat = nalgebra::geometry::UnitQuaternion::from_quaternion(car.rotation());
                         let rot = unit_quat.euler_angles();
                         let rot = [rot.0 as f32, rot.1 as f32, rot.2 as f32];
                         clients.push((client.id, pos, vel, angvel, rot, car.hitbox_half, false));
@@ -421,24 +419,26 @@ impl Server {
                 check_physics(&mut clients);
                 for (id, pos, vel, angvel, rot, hbox, has_hit) in &mut clients {
                     if *has_hit {
-                        'l: for client in &self.clients {
+                        'l: for client in &mut self.clients {
                             if client.id == *id {
-                                if let Some((_, car)) = client.cars.get(0) {
-                                    let og_vel: [f64; 3] = car.vel.into();
-                                    let og_angvel: [f64; 3] = car.rvel.into();
-                                    for i in 0..3 {
-                                        vel[i] = vel[i];
-                                        angvel[i] = -angvel[i];
+                                if client.last_physics_update.elapsed().as_millis() > 100 {
+                                    if let Some((_, car)) = client.cars.get(0) {
+                                        let og_vel: [f64; 3] = car.vel.into();
+                                        let og_angvel: [f64; 3] = car.rvel.into();
+                                        for i in 0..3 {
+                                            vel[i] = vel[i];
+                                            angvel[i] = -angvel[i];
+                                        }
+                                        let data = format!("{};{};{}#{};{};{}", vel[0], vel[1], vel[2], angvel[0], angvel[1], angvel[2]);
+                                        client.trigger_client_event("SetVelocity", data).await;
                                     }
-                                    let data = format!("{};{};{}#{};{};{}", vel[0], vel[1], vel[2], angvel[0], angvel[1], angvel[2]);
-                                    client.trigger_client_event("SetVelocity", data).await;
+                                    client.last_physics_update = Instant::now();
                                 }
                                 break 'l;
                             }
                         }
                     }
                 }
-                self.physics_timer = Instant::now();
             }
         }
 
@@ -573,7 +573,7 @@ impl Server {
         let elapsed = self.server_state_start.elapsed();
         match self.server_state {
             ServerState::WaitingForClients => {
-                if self.config.event.expected_clients.is_some() && elapsed.as_secs() < 150 {
+                if self.config.event.expected_clients.is_some() && elapsed.as_secs() < 300 {
                     let mut joined_clients = required_clients.clone();
                     joined_clients.retain(|name| {
                         for client in &self.clients {
@@ -982,6 +982,7 @@ impl Server {
                                     car.rvel = pos_data.rvel.into();
                                     car.tim = pos_data.tim;
                                     car.ping = pos_data.ping;
+                                    car.last_pos_update = Some(Instant::now());
                                 } else {
                                     if let Some(udp_addr) = self.clients[i].udp_addr {
                                         self.send_udp(udp_addr, &p).await;
@@ -1098,7 +1099,7 @@ impl Server {
                                             if client.id == id {
                                                 if let Some((_, car)) = client.cars.get_mut(0) {
                                                     // car.hitbox_half = [w / 4.0, l / 4.0, 1.0];
-                                                    car.hitbox_half = [1.0, 2.0, 1.0];
+                                                    car.hitbox_half = [0.65, 1.0, 0.6];
                                                 }
                                             }
                                         }
