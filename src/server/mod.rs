@@ -261,10 +261,15 @@ impl Server {
         })
     }
 
-    pub fn set_server_state(&mut self, state: ServerState) {
+    pub async fn set_server_state(&mut self, state: ServerState) {
         debug!("new state: {:?}", state);
         self.server_state = state;
         self.server_state_start = Instant::now();
+        for client in &mut self.clients {
+            if let Some(overlay) = &mut client.overlay {
+                overlay.set_state(&state).await;
+            }
+        }
     }
 
     pub async fn process(&mut self) -> anyhow::Result<()> {
@@ -591,7 +596,7 @@ impl Server {
                 } else {
                     self.connect_runtime_handle.abort();
                     info!("Clients no longer allowed to join!");
-                    self.set_server_state(ServerState::WaitingForReady);
+                    self.set_server_state(ServerState::WaitingForReady).await;
                 }
             }
             ServerState::WaitingForReady => {
@@ -604,7 +609,7 @@ impl Server {
                 if all_ready {
                     self.allow_spawns = true;
                     self.connect_runtime_handle.abort(); // Only abort here, otherwise we might stop joining clients from finishing joining
-                    self.set_server_state(ServerState::WaitingForSpawns);
+                    self.set_server_state(ServerState::WaitingForSpawns).await;
 
                     for client in &mut self.clients {
                         client.ready = false;
@@ -620,7 +625,7 @@ impl Server {
                 }
                 if has_spawned == self.clients.len() {
                     info!("All clients have spawned a car!");
-                    self.set_server_state(ServerState::Qualifying);
+                    self.set_server_state(ServerState::Qualifying).await;
                     self.allow_spawns = false;
                     self.force_respawn_pits = true;
                     let mut i = 0;
@@ -681,7 +686,7 @@ impl Server {
                         }
                     }
 
-                    self.set_server_state(ServerState::LiningUp);
+                    self.set_server_state(ServerState::LiningUp).await;
                     self.allow_respawns = false;
                     self.allow_spawns = false;
                     self.force_respawn_pits = false;
@@ -738,7 +743,7 @@ impl Server {
                         }
                     }
                     if all_ready {
-                        self.set_server_state(ServerState::Countdown);
+                        self.set_server_state(ServerState::Countdown).await;
                         self.generic_timer0 = Instant::now();
                     }
                 }
@@ -748,13 +753,9 @@ impl Server {
                     for i in 0..self.clients.len() {
                         if !self.clients[i].ready {
                             self.clients[i].kick("Not ready in time!").await;
-                        } else {
-                            if let Some(overlay) = &mut self.clients[i].overlay {
-                                overlay.set_state(&ServerState::Countdown).await;
-                            }
                         }
                     }
-                    self.set_server_state(ServerState::Countdown);
+                    self.set_server_state(ServerState::Countdown).await;
                     self.generic_timer0 = Instant::now();
                 }
             }
@@ -767,11 +768,11 @@ impl Server {
                             overlay.set_countdown(self.countdown).await;
                         }
                     }
-                    if self.countdown == 0 {
-                        self.set_server_state(ServerState::Race);
-                        self.force_respawn_pits = true;
-                    }
                     self.generic_timer0 = Instant::now();
+                }
+                if self.countdown == 0 && self.generic_timer0.elapsed().as_millis() > 1000 {
+                    self.set_server_state(ServerState::Race).await;
+                    self.force_respawn_pits = true;
                 }
             }
             ServerState::Race => {
